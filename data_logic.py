@@ -303,6 +303,9 @@ def fetch_redfin_data():
         with gzip.open(buf, "rt") as f:
             df = pd.read_csv(f, sep="\t", low_memory=False)
 
+        # Normalize column names to lowercase
+        df.columns = [c.lower() for c in df.columns]
+
     except Exception as e:
         print(f"[REALESTATE-1000] Redfin download failed: {e}")
         return result
