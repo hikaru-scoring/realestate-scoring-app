@@ -1,12 +1,12 @@
-name: Record Daily Real Estate Scores
+name: Record Daily Scores
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # UTC 03:00 daily
+    - cron: '0 3 * * *'  # 03:00 UTC daily
   workflow_dispatch:
 
 jobs:
-  record-scores:
+  record:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,17 +15,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: pip install pandas
+      - run: pip install pandas numpy requests
 
-      - name: Record scores
-        run: python record_scores.py
-        timeout-minutes: 5
+      - run: python record_scores.py
 
-      - name: Commit and push
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add scores_history.json
-          git diff --staged --quiet || git commit -m "Daily score update: $(date +%s)"
-          git push
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'Daily score update'
