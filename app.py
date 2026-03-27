@@ -42,6 +42,22 @@ STATE_COORDS = {
     "WI": (44.6, -89.8), "WY": (43.0, -107.6), "DC": (38.9, -77.0),
 }
 
+SHORT_DESCRIPTIONS = {
+    "Affordability": "Price-to-income, mortgage burden, rent-to-income",
+    "Market Momentum": "Price YoY, inventory, days on market, sale-to-list",
+    "Economic Foundation": "Unemployment, population growth, GDP",
+    "Risk Profile": "FEMA disaster frequency (inverse)",
+    "Investment Return": "Rental yield, 5-year appreciation",
+}
+
+WHY_EXPLANATIONS = {
+    "Affordability": "Based on price-to-income ratio, mortgage burden, and rent-to-income ratio across all 50 states.",
+    "Market Momentum": "Based on YoY price change, months of supply, days on market, and sale-to-list ratio.",
+    "Economic Foundation": "Based on unemployment rate, population growth, and GDP growth.",
+    "Risk Profile": "Based on FEMA disaster frequency over the past 5 years. Fewer disasters = higher score.",
+    "Investment Return": "Based on rental yield and 5-year price appreciation.",
+}
+
 st.set_page_config(page_title=APP_TITLE, page_icon="\U0001f3e0", layout="wide")
 
 # ---------------------------------------------------------------------------
@@ -532,7 +548,7 @@ with tab_detail:
                 # Individual axis score cards
                 for ax_name in AXES_LABELS:
                     ax_val = axes.get(ax_name, 0)
-                    desc = AXES_DESCRIPTIONS.get(ax_name, "")
+                    desc = SHORT_DESCRIPTIONS.get(ax_name, "")
                     st.markdown(f"""
                     <div style="
                         background-color: #FFFFFF;
@@ -553,6 +569,8 @@ with tab_detail:
                         <p style="font-size: 1.05em; color: #777777; margin: 0; line-height: 1.3; font-weight: 500;">{desc}</p>
                     </div>
                     """, unsafe_allow_html=True)
+                    with st.expander(f"Why {int(ax_val)}?", expanded=False):
+                        st.markdown(WHY_EXPLANATIONS.get(ax_name, ""))
 
             # Key metrics (snapshot style)
             st.markdown(
