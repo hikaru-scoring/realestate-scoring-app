@@ -17,46 +17,32 @@ from data_logic import (
 )
 
 APP_TITLE = "REALESTATE-1000"
+PRIMARY_COLOR = "#2E8B57"
 SCORES_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "scores_history.json")
 
 st.set_page_config(page_title=APP_TITLE, page_icon="\U0001f3e0", layout="wide")
 
 # ---------------------------------------------------------------------------
-# CSS
+# CSS Injection (hide Streamlit chrome)
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
-.block-container { max-width: 1600px; padding-top: 1rem; font-family: 'Inter', sans-serif; }
-
-.hero-title { font-size: 42px; font-weight: 900; color: #2E8B57; margin-bottom: 0; }
-.hero-sub { font-size: 18px; color: #444; margin-top: 4px; margin-bottom: 4px; }
-.hero-desc { font-size: 14px; color: #888; margin-bottom: 24px; }
-
-.metric-card {
-    background: #ffffff; border-radius: 12px; padding: 16px 20px;
-    border: 1px solid #E8E8E8; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    text-align: center;
-}
-.metric-label { font-size: 12px; color: #888; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
-.metric-value { font-size: 28px; font-weight: 900; color: #1E293B; }
-.metric-name { font-size: 14px; color: #2E8B57; font-weight: 600; margin-top: 2px; }
-
-.score-big { font-size: 72px; font-weight: 900; color: #2E8B57; text-align: center; line-height: 1; }
-.score-label { font-size: 14px; color: #888; text-align: center; font-weight: 600; letter-spacing: 2px; }
-
-.axis-card {
-    background: #ffffff; border-radius: 10px; padding: 12px 16px;
-    border: 1px solid #EDEDED; margin-bottom: 8px;
-    display: flex; justify-content: space-between; align-items: center;
-}
-.axis-label { font-size: 14px; color: #444; font-weight: 600; }
-.axis-value { font-size: 22px; font-weight: 900; color: #1A1C1E; }
-
-.section-title {
-    font-size: 15px; font-weight: 700; color: #2E8B57;
-    text-transform: uppercase; letter-spacing: 1px; margin: 24px 0 12px;
-}
+.block-container { padding-top: 1rem !important; }
+header[data-testid="stHeader"] { display: none !important; }
+footer { display: none !important; }
+#MainMenu { display: none !important; }
+.viewerBadge_container__r5tak { display: none !important; }
+.styles_viewerBadge__CvC9N { display: none !important; }
+[data-testid="stActionButtonIcon"] { display: none !important; }
+[data-testid="manage-app-button"] { display: none !important; }
+a[href*="github.com"] img { display: none !important; }
+div[class*="viewerBadge"] { display: none !important; }
+div[class*="StatusWidget"] { display: none !important; }
+div[data-testid="stStatusWidget"] { display: none !important; }
+.stDeployButton { display: none !important; }
+div[class*="stToolbar"] { display: none !important; }
+div.embeddedAppMetaInfoBar_container__DxxL1 { display: none !important; }
+div[class*="embeddedAppMetaInfoBar"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,80 +50,28 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-def score_color(score, max_score=1000):
-    """Return a hex color from red (low) to green (high)."""
-    ratio = score / max_score
-    if ratio >= 0.7:
-        return "#2E8B57"
-    elif ratio >= 0.5:
-        return "#DAA520"
+def score_color(score):
+    """Return a hex color based on score thresholds."""
+    if score >= 800:
+        return "#10b981"  # green
+    elif score >= 600:
+        return "#2E7BE6"  # blue
+    elif score >= 400:
+        return "#f59e0b"  # amber
     else:
-        return "#DC3545"
+        return "#ef4444"  # red
 
 
-def affordability_color(ratio):
-    """Return color and label based on price-to-income ratio."""
-    if ratio < 3:
-        return "\U0001f7e2", "Affordable"
-    elif ratio <= 5:
-        return "\U0001f7e1", "Moderate"
+def axis_score_color(score):
+    """Return a hex color based on axis score thresholds (/200)."""
+    if score >= 160:
+        return "#10b981"
+    elif score >= 120:
+        return "#2E7BE6"
+    elif score >= 80:
+        return "#f59e0b"
     else:
-        return "\U0001f534", "Expensive"
-
-
-def render_radar_chart(axes_dict, name, color="#2E8B57"):
-    """Render a 5-axis radar chart."""
-    labels = list(axes_dict.keys())
-    values = list(axes_dict.values())
-    values_closed = values + [values[0]]
-    labels_closed = labels + [labels[0]]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=values_closed,
-        theta=labels_closed,
-        fill='toself',
-        fillcolor='rgba(46, 139, 87, 0.15)',
-        line_color=color,
-        line=dict(width=3),
-        name=name,
-    ))
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 200], gridcolor="#F0F0F0", tickfont=dict(size=10)),
-            angularaxis=dict(rotation=90, direction="clockwise", tickfont=dict(size=11)),
-            bgcolor='white',
-        ),
-        showlegend=False,
-        margin=dict(l=60, r=60, t=30, b=30),
-        height=400,
-    )
-    return fig
-
-
-def render_breakdown_bar(axes_dict):
-    """Render horizontal bar chart for score breakdown."""
-    labels = list(axes_dict.keys())
-    values = list(axes_dict.values())
-    colors = ['#2E8B57' if v >= 140 else '#DAA520' if v >= 80 else '#DC3545' for v in values]
-
-    fig = go.Figure(go.Bar(
-        x=values,
-        y=labels,
-        orientation='h',
-        marker_color=colors,
-        text=[f"{v}/200" for v in values],
-        textposition='auto',
-        textfont=dict(size=13, color='white'),
-    ))
-    fig.update_layout(
-        xaxis=dict(range=[0, 200], title="Score", gridcolor="#F0F0F0"),
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=10, r=20, t=10, b=40),
-        height=250,
-        plot_bgcolor='white',
-    )
-    return fig
+        return "#ef4444"
 
 
 def _load_scores_history():
@@ -164,9 +98,13 @@ def cached_metro_rankings():
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
-st.markdown('<div class="hero-title">REALESTATE-1000</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-sub">US Real Estate Market Scoring</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-desc">Scoring all 50 states + DC based on real-time market data. Data: Census ACS 2023, BLS, Redfin, FEMA</div>', unsafe_allow_html=True)
+st.markdown(f"""
+<div style="text-align:center; margin-bottom:10px;">
+    <div style="font-size:38px; font-weight:900; color:{PRIMARY_COLOR};">REALESTATE-1000</div>
+    <div style="font-size:16px; color:#64748B; margin-top:-4px;">US Real Estate Market Scoring</div>
+    <div style="font-size:13px; color:#999; margin-top:2px;">Scoring all 50 states + DC based on real-time market data. Data: Census ACS 2023, BLS, Redfin, FEMA</div>
+</div>
+""", unsafe_allow_html=True)
 
 # View toggle
 view_mode = st.radio("View", ["States", "Metro Areas"], horizontal=True, label_visibility="collapsed")
@@ -188,51 +126,10 @@ if not rankings:
 
 
 # ---------------------------------------------------------------------------
-# Summary Stats Row
-# ---------------------------------------------------------------------------
-scores = [r["total"] for r in rankings]
-best = max(rankings, key=lambda x: x["total"])
-worst = min(rankings, key=lambda x: x["total"])
-avg_score = int(round(sum(scores) / len(scores)))
-
-# Get mortgage rate from first state data
-mortgage_rate = rankings[0]["data"].get("mortgage_rate", 6.8) if rankings else 6.8
-
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.markdown(f"""<div class="metric-card">
-        <div class="metric-label">States Scored</div>
-        <div class="metric-value">{len(rankings)}</div>
-    </div>""", unsafe_allow_html=True)
-with col2:
-    st.markdown(f"""<div class="metric-card">
-        <div class="metric-label">National Average</div>
-        <div class="metric-value">{avg_score}/1000</div>
-    </div>""", unsafe_allow_html=True)
-with col3:
-    st.markdown(f"""<div class="metric-card">
-        <div class="metric-label">Highest Score</div>
-        <div class="metric-value">{best['total']}</div>
-        <div class="metric-name">{best['name']}</div>
-    </div>""", unsafe_allow_html=True)
-with col4:
-    st.markdown(f"""<div class="metric-card">
-        <div class="metric-label">Lowest Score</div>
-        <div class="metric-value">{worst['total']}</div>
-        <div class="metric-name">{worst['name']}</div>
-    </div>""", unsafe_allow_html=True)
-with col5:
-    st.markdown(f"""<div class="metric-card">
-        <div class="metric-label">30yr Mortgage Rate</div>
-        <div class="metric-value">{mortgage_rate}%</div>
-    </div>""", unsafe_allow_html=True)
-
-st.markdown("")
-
-
-# ---------------------------------------------------------------------------
 # US Choropleth Map (States view) / Bubble Map (Metro view)
 # ---------------------------------------------------------------------------
+scores = [r["total"] for r in rankings]
+
 if view_mode == "States":
     df_map = pd.DataFrame([
         {
@@ -333,64 +230,9 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# Ranking Table
-# ---------------------------------------------------------------------------
-st.markdown('<div class="section-title">Full Rankings</div>', unsafe_allow_html=True)
-
-table_rows = []
-for i, r in enumerate(rankings, 1):
-    row = {
-        "Rank": i,
-        "Name": r["name"],
-        "Score /1000": r["total"],
-    }
-    for ax in AXES_LABELS:
-        row[f"{ax} /200"] = r["axes"][ax]
-    table_rows.append(row)
-
-df_table = pd.DataFrame(table_rows)
-
-st.dataframe(
-    df_table,
-    use_container_width=True,
-    hide_index=True,
-    height=450,
-)
-
-
-# ---------------------------------------------------------------------------
-# Top 10 / Bottom 10
-# ---------------------------------------------------------------------------
-col_top, col_bot = st.columns(2)
-with col_top:
-    st.markdown('<div class="section-title">Top 10</div>', unsafe_allow_html=True)
-    for i, r in enumerate(rankings[:10], 1):
-        c = score_color(r["total"])
-        st.markdown(
-            f'<div class="axis-card"><span class="axis-label">{i}. {r["name"]}</span>'
-            f'<span class="axis-value" style="color:{c}">{r["total"]}/1000</span></div>',
-            unsafe_allow_html=True,
-        )
-
-with col_bot:
-    st.markdown('<div class="section-title">Bottom 10</div>', unsafe_allow_html=True)
-    bottom = rankings[-10:]
-    bottom_rev = list(reversed(bottom))
-    for i, r in enumerate(bottom_rev, len(rankings) - 9):
-        c = score_color(r["total"])
-        st.markdown(
-            f'<div class="axis-card"><span class="axis-label">{i}. {r["name"]}</span>'
-            f'<span class="axis-value" style="color:{c}">{r["total"]}/1000</span></div>',
-            unsafe_allow_html=True,
-        )
-
-
-# ---------------------------------------------------------------------------
 # Detail View
 # ---------------------------------------------------------------------------
 st.markdown("---")
-st.markdown('<div class="section-title">Market Detail</div>', unsafe_allow_html=True)
-
 name_list = [r["name"] for r in rankings]
 selected_name = st.selectbox("Select a market to view details", name_list)
 selected = next((r for r in rankings if r["name"] == selected_name), None)
@@ -399,36 +241,81 @@ if selected:
     d = selected["data"]
     total = selected["total"]
     axes = selected["axes"]
+    sc = score_color(total)
 
-    # State name large
-    st.markdown(f"## {selected['name']}")
+    # Total score centered
+    st.markdown(f"""
+    <div style="text-align:center; margin-top:4px; margin-bottom:10px;">
+        <div style="font-size:14px; letter-spacing:2px; color:#666;">TOTAL SCORE</div>
+        <div style="font-size:90px; font-weight:800; color:{sc}; line-height:1;">
+            {total}
+            <span style="font-size:35px; color:#BBB;">/ 1000</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Header: score + radar
-    col_score, col_radar = st.columns([1, 2])
-    with col_score:
-        st.markdown('<div class="score-label">TOTAL SCORE</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="score-big" style="color:{score_color(total)}">{total}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="score-label">/1000</div>', unsafe_allow_html=True)
+    # Layout: Radar Chart (left) + Score Cards (right)
+    col_left, col_right = st.columns([1.5, 1])
 
-        st.markdown("")
-        # Axis breakdown cards
-        for ax_name, ax_val in axes.items():
-            c = score_color(ax_val, 200)
-            st.markdown(
-                f'<div class="axis-card"><span class="axis-label">{ax_name}</span>'
-                f'<span class="axis-value" style="color:{c}">{ax_val}/200</span></div>',
-                unsafe_allow_html=True,
-            )
+    with col_left:
+        # Radar chart
+        labels = list(axes.keys())
+        values = list(axes.values())
+        values_closed = values + [values[0]]
+        labels_closed = labels + [labels[0]]
 
-    with col_radar:
-        st.plotly_chart(render_radar_chart(axes, selected["name"]), use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(
+            r=values_closed,
+            theta=labels_closed,
+            fill='toself',
+            fillcolor='rgba(46, 139, 87, 0.1)',
+            line_color=PRIMARY_COLOR,
+            line=dict(width=4),
+            name=selected["name"],
+        ))
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 200], gridcolor="#F0F0F0"),
+                angularaxis=dict(rotation=90, direction="clockwise"),
+                bgcolor='white',
+            ),
+            showlegend=False,
+            margin=dict(l=50, r=50, t=20, b=20),
+            height=500,
+            clickmode='none',
+            dragmode=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    # Score breakdown bar chart
-    st.markdown('<div class="section-title">Score Breakdown</div>', unsafe_allow_html=True)
-    st.plotly_chart(render_breakdown_bar(axes), use_container_width=True)
+    with col_right:
+        # Individual axis score cards
+        for ax_name in AXES_LABELS:
+            ax_val = axes.get(ax_name, 0)
+            desc = AXES_DESCRIPTIONS.get(ax_name, "")
+            st.markdown(f"""
+            <div style="
+                background-color: #FFFFFF;
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 12px;
+                border: 1px solid #E0E0E0;
+                border-left: 8px solid {PRIMARY_COLOR};
+                box-shadow: 2px 2px 5px rgba(0,0,0,0.07);
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span style="font-size: 1.4em; font-weight: 800; color: #333333;">{ax_name}</span>
+                    <span style="font-size: 1.9em; font-weight: 900; line-height: 1;">
+                        <span style="color: {PRIMARY_COLOR};">{ax_val}</span>
+                        <span style="color:#bbb;font-size:0.5em;font-weight:600;"> /200</span>
+                    </span>
+                </div>
+                <p style="font-size: 1.05em; color: #777777; margin: 0; line-height: 1.3; font-weight: 500;">{desc}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
     # Key metrics
-    st.markdown('<div class="section-title">Key Metrics</div>', unsafe_allow_html=True)
+    st.markdown("#### Key Metrics")
 
     pti = round(d["median_home_price"] / d["median_income"], 1) if d["median_income"] else 0
 
@@ -450,30 +337,6 @@ if selected:
         st.metric("Months of Inventory", f"{d['months_inventory']}")
         st.metric("Days on Market", f"{d['days_on_market']}")
 
-    # Affordability indicator
-    st.markdown('<div class="section-title">Affordability Assessment</div>', unsafe_allow_html=True)
-    indicator, label = affordability_color(pti)
-
-    monthly_rate = d["mortgage_rate"] / 100 / 12
-    principal = d["median_home_price"] * 0.8
-    n = 360
-    if monthly_rate > 0:
-        payment = principal * monthly_rate * (1 + monthly_rate)**n / ((1 + monthly_rate)**n - 1)
-    else:
-        payment = principal / n
-    rent_pct = round(d["rent_median"] * 12 / d["median_income"] * 100, 1) if d["median_income"] else 0
-
-    ac1, ac2, ac3 = st.columns(3)
-    with ac1:
-        st.markdown(f"### {indicator} {label}")
-        st.caption(f"Price-to-income ratio: {pti}x")
-    with ac2:
-        st.metric("Est. Monthly Mortgage (20% down)", f"${int(payment):,}")
-        st.caption(f"At {d['mortgage_rate']}% rate, 30yr fixed")
-    with ac3:
-        st.metric("Rent as % of Income", f"{rent_pct}%")
-        st.caption(f"Median rent: ${d['rent_median']:,}/mo")
-
 
 # ---------------------------------------------------------------------------
 # Score History
@@ -481,78 +344,86 @@ if selected:
 history = _load_scores_history()
 if history:
     st.markdown("---")
-    st.markdown('<div class="section-title">Score History</div>', unsafe_allow_html=True)
+    st.markdown("#### Score History")
 
     dates = sorted(history.keys())
     if len(dates) >= 1:
-        # Build history data for the current view
         prefix = "State:" if view_mode == "States" else "Metro:"
-        history_rows = []
-        for date in dates:
-            day_data = history[date]
-            for key, score_val in day_data.items():
-                if key.startswith(prefix):
-                    market_name = key[len(prefix):]
-                    # Convert abbreviation to full name for states
-                    if view_mode == "States":
-                        full_name = None
-                        for fips_info in STATE_FIPS.values():
-                            if fips_info["abbr"] == market_name:
-                                full_name = fips_info["name"]
-                                break
-                        if full_name is None:
-                            full_name = market_name
-                        market_name = full_name
-                    history_rows.append({
-                        "Date": date,
-                        "Market": market_name,
-                        "Score": score_val,
-                    })
 
-        if history_rows:
-            df_hist = pd.DataFrame(history_rows)
-            df_hist["Date"] = pd.to_datetime(df_hist["Date"])
+        # Get history for selected market
+        if selected:
+            sel_name = selected["name"]
+            hist_dates = []
+            hist_values = []
+            for date in dates:
+                day_data = history[date]
+                for key, score_val in day_data.items():
+                    if key.startswith(prefix):
+                        market_name = key[len(prefix):]
+                        if view_mode == "States":
+                            full_name = None
+                            for fips_info in STATE_FIPS.values():
+                                if fips_info["abbr"] == market_name:
+                                    full_name = fips_info["name"]
+                                    break
+                            if full_name is None:
+                                full_name = market_name
+                            market_name = full_name
+                        if market_name == sel_name:
+                            hist_dates.append(date)
+                            hist_values.append(score_val)
 
-            # If a market is selected in detail view, highlight it
-            if selected:
-                sel_name = selected["name"]
-                df_selected = df_hist[df_hist["Market"] == sel_name]
-                if not df_selected.empty:
-                    fig_hist = px.line(
-                        df_selected,
-                        x="Date",
-                        y="Score",
-                        title=f"Score History: {sel_name}",
-                        markers=True,
-                    )
-                    fig_hist.update_layout(
-                        yaxis=dict(range=[0, 1000]),
-                        height=350,
-                        margin=dict(l=40, r=20, t=40, b=30),
-                    )
-                    fig_hist.update_traces(line_color="#2E8B57")
-                    st.plotly_chart(fig_hist, use_container_width=True)
-                else:
-                    st.caption("No history data for the selected market yet.")
+            if hist_values:
+                fig_daily = go.Figure()
+                fig_daily.add_trace(go.Scatter(
+                    x=hist_dates,
+                    y=hist_values,
+                    mode='lines+markers',
+                    line=dict(color=PRIMARY_COLOR, width=2),
+                    marker=dict(size=5),
+                    fill='tozeroy',
+                    fillcolor='rgba(46, 139, 87, 0.05)',
+                    name=sel_name,
+                ))
+                fig_daily.update_layout(
+                    yaxis=dict(range=[0, 1000], title="Score"),
+                    height=250,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='white',
+                    hovermode="x unified",
+                    clickmode='none',
+                    dragmode=False,
+                )
+                st.plotly_chart(fig_daily, use_container_width=True, config={"displayModeBar": False})
             else:
-                # Show top 5 markets history
-                top_names = [r["name"] for r in rankings[:5]]
-                df_top = df_hist[df_hist["Market"].isin(top_names)]
-                if not df_top.empty:
-                    fig_hist = px.line(
-                        df_top,
-                        x="Date",
-                        y="Score",
-                        color="Market",
-                        title="Score History (Top 5)",
-                        markers=True,
-                    )
-                    fig_hist.update_layout(
-                        yaxis=dict(range=[0, 1000]),
-                        height=350,
-                        margin=dict(l=40, r=20, t=40, b=30),
-                    )
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                st.caption("No history data for the selected market yet.")
+
+
+# ---------------------------------------------------------------------------
+# Ranking Table
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("#### Full Rankings")
+
+table_rows = []
+for i, r in enumerate(rankings, 1):
+    row = {
+        "Rank": i,
+        "Name": r["name"],
+        "Score /1000": r["total"],
+    }
+    for ax in AXES_LABELS:
+        row[f"{ax} /200"] = r["axes"][ax]
+    table_rows.append(row)
+
+df_table = pd.DataFrame(table_rows)
+
+st.dataframe(
+    df_table,
+    use_container_width=True,
+    hide_index=True,
+    height=450,
+)
 
 
 # ---------------------------------------------------------------------------
