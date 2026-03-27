@@ -154,319 +154,474 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# View toggle
-view_mode = st.radio("View", ["States", "Metro Areas"], horizontal=True, label_visibility="collapsed")
+# ---------------------------------------------------------------------------
+# Tabs
+# ---------------------------------------------------------------------------
+tab_dash, tab_detail, tab_rankings = st.tabs(["Dashboard", "Market Detail", "Rankings"])
 
 # Load data with spinner
 with st.spinner("Loading market data..."):
     try:
-        if view_mode == "States":
-            rankings = cached_state_rankings()
-        else:
-            rankings = cached_metro_rankings()
+        state_rankings = cached_state_rankings()
     except Exception as e:
-        st.warning(f"Failed to load data: {e}")
-        rankings = []
+        state_rankings = []
+    try:
+        metro_rankings = cached_metro_rankings()
+    except Exception as e:
+        metro_rankings = []
 
-if not rankings:
-    st.error("No data available.")
-    st.stop()
-
-
-# ---------------------------------------------------------------------------
-# US Choropleth Map (States view) / Bubble Map (Metro view)
-# ---------------------------------------------------------------------------
-scores = [r["total"] for r in rankings]
-
-if view_mode == "States":
-    df_map = pd.DataFrame([
-        {
-            "abbr": r["abbr"],
-            "name": r["name"],
-            "score": r["total"],
-            "Affordability": r["axes"]["Affordability"],
-            "Momentum": r["axes"]["Market Momentum"],
-            "Economy": r["axes"]["Economic Foundation"],
-            "Risk": r["axes"]["Risk Profile"],
-            "Investment": r["axes"]["Investment Return"],
-        }
-        for r in rankings
-    ])
-
-    fig_map = px.choropleth(
-        df_map,
-        locations="abbr",
-        locationmode="USA-states",
-        color="score",
-        hover_name="name",
-        hover_data={
-            "abbr": False,
-            "score": True,
-            "Affordability": True,
-            "Momentum": True,
-            "Economy": True,
-            "Risk": True,
-            "Investment": True,
-        },
-        color_continuous_scale=[
-            [0, "#d32f2f"],
-            [0.5, "#ffd54f"],
-            [1, "#2e7d32"],
-        ],
-        range_color=[min(scores) - 20, max(scores) + 20],
-        scope="usa",
-        labels={"score": "Total Score"},
+# ===================================================================
+# DASHBOARD TAB
+# ===================================================================
+with tab_dash:
+    st.markdown(
+        "<div style='font-size:1.5em; font-weight:900; color:#1e3a8a; margin-bottom:5px;'>"
+        "Real Estate Dashboard</div>"
+        "<p style='color:#64748b; margin-bottom:20px;'>"
+        "Real-time overview of all 50 states + DC scored on a 1000-point scale.</p>",
+        unsafe_allow_html=True,
     )
-    fig_map.update_layout(
-        geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=480,
-        coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
+
+    with st.expander("How to use REALESTATE-1000"):
+        st.markdown("""
+**Dashboard** shows the overall Market Health Score, top/bottom movers, and state cards at a glance. Toggle between States and Metro Areas views.
+
+**Market Detail** lets you drill into any state or metro area. View radar charts, score breakdowns, key metrics, and score history.
+
+**Rankings** shows the full ranking table and scoring methodology.
+
+**Data Sources**: US Census Bureau (ACS 2023), Bureau of Labor Statistics, Redfin, FEMA, Bureau of Economic Analysis. All public, no authentication required.
+""")
+
+    # View toggle
+    view_mode = st.radio("View", ["States", "Metro Areas"], horizontal=True, label_visibility="collapsed")
+
+    if view_mode == "States":
+        rankings = state_rankings
+    else:
+        rankings = metro_rankings
+
+    if not rankings:
+        st.error("No data available.")
+        st.stop()
+
+    # Sort by total score descending
+    all_scores = sorted(rankings, key=lambda x: x["total"], reverse=True)
+
+    # Market Health Score
+    avg_score = int(sum(s["total"] for s in all_scores) / len(all_scores))
+    if avg_score >= 700:
+        health_color, health_label = "#10b981", "STRONG"
+    elif avg_score >= 500:
+        health_color, health_label = "#2E7BE6", "MODERATE"
+    else:
+        health_color, health_label = "#ef4444", "WEAK"
+
+    count_label = f"{len(all_scores)} states" if view_mode == "States" else f"{len(all_scores)} metro areas"
+
+    st.markdown(
+        f"""<div style="text-align:center; padding:25px; background:linear-gradient(135deg, #f8fafc, #e2e8f0);
+        border-radius:20px; margin-bottom:25px;">
+        <div style="font-size:0.9em; color:#64748b; font-weight:700; letter-spacing:2px;">
+        MARKET HEALTH SCORE</div>
+        <div style="font-size:4em; font-weight:900; color:{health_color}; line-height:1.1;">
+        {avg_score}</div>
+        <div style="font-size:1em; font-weight:700; color:{health_color};">{health_label}</div>
+        <div style="font-size:0.8em; color:#94a3b8; margin-top:5px;">
+        Average across {count_label}</div>
+        </div>""",
+        unsafe_allow_html=True,
     )
-    st.plotly_chart(fig_map, use_container_width=True)
 
-else:
-    df_metro = pd.DataFrame([
-        {
-            "name": r["name"],
-            "lat": r["lat"],
-            "lng": r["lng"],
-            "score": r["total"],
-            "state": r["state"],
-            "Affordability": r["axes"]["Affordability"],
-            "Momentum": r["axes"]["Market Momentum"],
-            "Economy": r["axes"]["Economic Foundation"],
-            "Risk": r["axes"]["Risk Profile"],
-            "Investment": r["axes"]["Investment Return"],
-        }
-        for r in rankings
-    ])
-
-    fig_metro = px.scatter_geo(
-        df_metro,
-        lat="lat",
-        lon="lng",
-        size="score",
-        color="score",
-        hover_name="name",
-        hover_data={
-            "lat": False, "lng": False, "state": True,
-            "score": True,
-            "Affordability": True,
-            "Momentum": True,
-            "Economy": True,
-            "Risk": True,
-            "Investment": True,
-        },
-        color_continuous_scale=[
-            [0, "#d32f2f"],
-            [0.5, "#ffd54f"],
-            [1, "#2e7d32"],
-        ],
-        range_color=[min(scores) - 20, max(scores) + 20],
-        scope="usa",
-        size_max=25,
-        labels={"score": "Total Score"},
-    )
-    fig_metro.update_layout(
-        geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=480,
-        coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
-    )
-    st.plotly_chart(fig_metro, use_container_width=True)
-
-
-# ---------------------------------------------------------------------------
-# Detail View
-# ---------------------------------------------------------------------------
-st.markdown("---")
-name_list = [r["name"] for r in rankings]
-selected_name = st.selectbox("Select a market to view details", name_list)
-selected = next((r for r in rankings if r["name"] == selected_name), None)
-
-if selected:
-    d = selected["data"]
-    total = selected["total"]
-    axes = selected["axes"]
-    sc = score_color(total)
-
-    # Total score centered
-    st.markdown(f"""
-    <div style="text-align:center; margin-top:4px; margin-bottom:10px;">
-        <div style="font-size:14px; letter-spacing:2px; color:#666;">TOTAL SCORE</div>
-        <div style="font-size:90px; font-weight:800; color:#2E7BE6; line-height:1;">
-            {total}
-            <span style="font-size:35px; color:#BBB;">/ 1000</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Score delta from last record
-    prefix = "State:" if view_mode == "States" else "Metro:"
-    render_score_delta(selected["name"], total, prefix=prefix)
-
-    # Layout: Radar Chart (left) + Score Cards (right)
-    col_left, col_right = st.columns([1.5, 1])
-
-    with col_left:
-        st.markdown("<div style='font-size: 1.1em; font-weight: bold; color: #333; margin-top: -10px; margin-bottom: 5px;'>I. Intelligence Radar</div>", unsafe_allow_html=True)
-
-        fig_r = render_radar_chart(
-            {"axes": axes, "name": selected["name"]},
-            None,
-            AXES_LABELS,
-        )
-        st.plotly_chart(fig_r, use_container_width=True)
-
-    with col_right:
-        st.markdown("<div style='font-size: 0.9em; font-weight: bold; color: #333; margin-top: -10px; margin-bottom: 15px; border-left: 3px solid #2E7BE6; padding-left: 8px;'>II. ANALYSIS SCORE METRICS</div>", unsafe_allow_html=True)
-        # Individual axis score cards
-        for ax_name in AXES_LABELS:
-            ax_val = axes.get(ax_name, 0)
-            desc = AXES_DESCRIPTIONS.get(ax_name, "")
-            st.markdown(f"""
-            <div style="
-                background-color: #FFFFFF;
-                padding: 20px;
-                border-radius: 12px;
-                margin-bottom: 12px;
-                border: 1px solid #E0E0E0;
-                border-left: 8px solid #2E7BE6;
-                box-shadow: 2px 2px 5px rgba(0,0,0,0.07);
-            ">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                    <span style="font-size: 1.4em; font-weight: 800; color: #333333;">{ax_name}</span>
-                    <span style="font-size: 1.9em; font-weight: 900; line-height: 1;">
-                        <span style="color: #2E7BE6;">{ax_val}</span>
-                        <span style="color:#bbb;font-size:0.5em;font-weight:600;"> /200</span>
-                    </span>
-                </div>
-                <p style="font-size: 1.05em; color: #777777; margin: 0; line-height: 1.3; font-weight: 500;">{desc}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Key metrics
-    st.markdown("#### Key Metrics")
-
-    pti = round(d["median_home_price"] / d["median_income"], 1) if d["median_income"] else 0
-
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1:
-        st.metric("Median Home Price", f"${d['median_home_price']:,}")
-        st.metric("Median Income", f"${d['median_income']:,}")
-        st.metric("Price-to-Income Ratio", f"{pti}x")
-    with mc2:
-        st.metric("Unemployment Rate", f"{d['unemployment']}%")
-        st.metric("Population Growth", f"{d['pop_growth']}%")
-        st.metric("Disaster Events (5yr)", d["disaster_freq"])
-    with mc3:
-        st.metric("Rental Yield (Cap Rate)", f"{d['cap_rate']}%")
-        st.metric("5yr Appreciation", f"{d['price_appreciation_5yr']}%")
-        st.metric("Vacancy Rate", f"{d['vacancy_rate']}%")
-    with mc4:
-        st.metric("YoY Price Change", f"{d['yoy_price_change']}%")
-        st.metric("Months of Inventory", f"{d['months_inventory']}")
-        st.metric("Days on Market", f"{d['days_on_market']}")
-
-
-# ---------------------------------------------------------------------------
-# Score History
-# ---------------------------------------------------------------------------
-history = _load_scores_history()
-if history:
-    st.markdown("---")
-    st.markdown("#### Score History")
-
-    dates = sorted(history.keys())
-    if len(dates) >= 1:
-        prefix = "State:" if view_mode == "States" else "Metro:"
-
-        # Get history for selected market
-        if selected:
-            sel_name = selected["name"]
-            hist_dates = []
-            hist_values = []
-            for date in dates:
-                day_data = history[date]
-                for key, score_val in day_data.items():
+    # Top / Bottom movers
+    history = _load_scores_history()
+    if history:
+        dates = sorted(history.keys(), reverse=True)
+        if dates:
+            prev = history[dates[0]]
+            prefix = "State:" if view_mode == "States" else "Metro:"
+            deltas = []
+            for s in all_scores:
+                # Find previous score using prefix mapping
+                prev_score = None
+                for key, score_val in prev.items():
                     if key.startswith(prefix):
                         market_name = key[len(prefix):]
                         if view_mode == "States":
-                            full_name = None
                             for fips_info in STATE_FIPS.values():
                                 if fips_info["abbr"] == market_name:
-                                    full_name = fips_info["name"]
+                                    market_name = fips_info["name"]
                                     break
-                            if full_name is None:
-                                full_name = market_name
-                            market_name = full_name
-                        if market_name == sel_name:
-                            hist_dates.append(date)
-                            hist_values.append(score_val)
+                        if market_name == s["name"]:
+                            prev_score = score_val
+                            break
+                if prev_score is not None:
+                    deltas.append({"name": s["name"], "delta": s["total"] - prev_score})
 
-            if hist_values:
-                fig_daily = go.Figure()
-                fig_daily.add_trace(go.Scatter(
-                    x=hist_dates,
-                    y=hist_values,
-                    mode='lines+markers',
-                    line=dict(color='#2E7BE6', width=2),
-                    marker=dict(size=5),
-                    fill='tozeroy',
-                    fillcolor='rgba(46,123,230,0.05)',
-                    name=sel_name,
-                ))
-                fig_daily.update_layout(
-                    yaxis=dict(range=[0, 1000], title="Score"),
-                    height=250,
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    plot_bgcolor='white',
-                    hovermode="x unified",
-                    clickmode='none',
-                    dragmode=False,
+            if deltas and any(d["delta"] != 0 for d in deltas):
+                deltas.sort(key=lambda x: x["delta"], reverse=True)
+                top_movers = deltas[:3]
+                bottom_movers = sorted(deltas, key=lambda x: x["delta"])[:3]
+
+                mv1, mv2 = st.columns(2)
+                with mv1:
+                    st.markdown("<div style='font-size:1em; font-weight:700; color:#10b981; margin-bottom:10px;'>Top Movers</div>", unsafe_allow_html=True)
+                    for m in top_movers:
+                        if m["delta"] > 0:
+                            st.markdown(f"""
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#f0fdf4; border-radius:8px; margin-bottom:6px;">
+                                <span style="font-weight:600; color:#1e293b;">{m['name']}</span>
+                                <span style="font-weight:700; color:#10b981;">&#9650; {m['delta']:+d}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                with mv2:
+                    st.markdown("<div style='font-size:1em; font-weight:700; color:#ef4444; margin-bottom:10px;'>Bottom Movers</div>", unsafe_allow_html=True)
+                    for m in bottom_movers:
+                        if m["delta"] < 0:
+                            st.markdown(f"""
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#fef2f2; border-radius:8px; margin-bottom:6px;">
+                                <span style="font-weight:600; color:#1e293b;">{m['name']}</span>
+                                <span style="font-weight:700; color:#ef4444;">&#9660; {m['delta']:+d}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+
+    # State/Metro cards grid
+    label = "All States" if view_mode == "States" else "All Metro Areas"
+    st.markdown(f"<div class='section-title'>{label}</div>", unsafe_allow_html=True)
+
+    cols = st.columns(3)
+    for i, s in enumerate(all_scores):
+        score = s["total"]
+        if score >= 700:
+            border_color = "#10b981"
+        elif score >= 500:
+            border_color = "#2E7BE6"
+        elif score >= 300:
+            border_color = "#f59e0b"
+        else:
+            border_color = "#ef4444"
+
+        abbr_label = s.get("abbr", "")
+        name_label = s["name"]
+        extra = f"${s['data']['median_home_price']:,}" if "data" in s and "median_home_price" in s.get("data", {}) else ""
+
+        with cols[i % 3]:
+            st.markdown(
+                f"""<div style="background:#fff; border-radius:12px; padding:18px; margin-bottom:12px;
+                border-left:4px solid {border_color}; box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+                <div style="font-size:0.75em; color:#94a3b8; font-weight:600;">{abbr_label}</div>
+                <div style="font-size:0.95em; font-weight:700; color:#1e293b; margin:2px 0;">
+                {name_label}</div>
+                <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                <span style="font-size:1.8em; font-weight:900; color:{border_color};">{score}</span>
+                <span style="font-size:0.8em; color:#94a3b8;">{extra}</span>
+                </div></div>""",
+                unsafe_allow_html=True,
+            )
+
+    # US Choropleth Map / Bubble Map
+    st.markdown("<div class='section-title'>Map</div>", unsafe_allow_html=True)
+    scores = [r["total"] for r in rankings]
+
+    if view_mode == "States":
+        df_map = pd.DataFrame([
+            {
+                "abbr": r["abbr"],
+                "name": r["name"],
+                "score": r["total"],
+                "Affordability": r["axes"]["Affordability"],
+                "Momentum": r["axes"]["Market Momentum"],
+                "Economy": r["axes"]["Economic Foundation"],
+                "Risk": r["axes"]["Risk Profile"],
+                "Investment": r["axes"]["Investment Return"],
+            }
+            for r in rankings
+        ])
+
+        fig_map = px.choropleth(
+            df_map,
+            locations="abbr",
+            locationmode="USA-states",
+            color="score",
+            hover_name="name",
+            hover_data={
+                "abbr": False,
+                "score": True,
+                "Affordability": True,
+                "Momentum": True,
+                "Economy": True,
+                "Risk": True,
+                "Investment": True,
+            },
+            color_continuous_scale=[
+                [0, "#d32f2f"],
+                [0.5, "#ffd54f"],
+                [1, "#2e7d32"],
+            ],
+            range_color=[min(scores) - 20, max(scores) + 20],
+            scope="usa",
+            labels={"score": "Total Score"},
+        )
+        fig_map.update_layout(
+            geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=480,
+            coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+
+    else:
+        df_metro = pd.DataFrame([
+            {
+                "name": r["name"],
+                "lat": r["lat"],
+                "lng": r["lng"],
+                "score": r["total"],
+                "state": r["state"],
+                "Affordability": r["axes"]["Affordability"],
+                "Momentum": r["axes"]["Market Momentum"],
+                "Economy": r["axes"]["Economic Foundation"],
+                "Risk": r["axes"]["Risk Profile"],
+                "Investment": r["axes"]["Investment Return"],
+            }
+            for r in rankings
+        ])
+
+        fig_metro = px.scatter_geo(
+            df_metro,
+            lat="lat",
+            lon="lng",
+            size="score",
+            color="score",
+            hover_name="name",
+            hover_data={
+                "lat": False, "lng": False, "state": True,
+                "score": True,
+                "Affordability": True,
+                "Momentum": True,
+                "Economy": True,
+                "Risk": True,
+                "Investment": True,
+            },
+            color_continuous_scale=[
+                [0, "#d32f2f"],
+                [0.5, "#ffd54f"],
+                [1, "#2e7d32"],
+            ],
+            range_color=[min(scores) - 20, max(scores) + 20],
+            scope="usa",
+            size_max=25,
+            labels={"score": "Total Score"},
+        )
+        fig_metro.update_layout(
+            geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=480,
+            coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
+        )
+        st.plotly_chart(fig_metro, use_container_width=True)
+
+
+# ===================================================================
+# MARKET DETAIL TAB
+# ===================================================================
+with tab_detail:
+    view_mode_detail = st.radio("View", ["States", "Metro Areas"], horizontal=True, label_visibility="collapsed", key="detail_view")
+
+    if view_mode_detail == "States":
+        detail_rankings = state_rankings
+    else:
+        detail_rankings = metro_rankings
+
+    if not detail_rankings:
+        st.error("No data available.")
+    else:
+        name_list = [r["name"] for r in detail_rankings]
+        selected_name = st.selectbox("Select a market to view details", name_list)
+        selected = next((r for r in detail_rankings if r["name"] == selected_name), None)
+
+        if selected:
+            d = selected["data"]
+            total = selected["total"]
+            axes = selected["axes"]
+            sc = score_color(total)
+
+            # Total score centered
+            st.markdown(f"""
+            <div style="text-align:center; margin-top:4px; margin-bottom:10px;">
+                <div style="font-size:14px; letter-spacing:2px; color:#666;">TOTAL SCORE</div>
+                <div style="font-size:90px; font-weight:800; color:#2E7BE6; line-height:1;">
+                    {total}
+                    <span style="font-size:35px; color:#BBB;">/ 1000</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Score delta from last record
+            prefix = "State:" if view_mode_detail == "States" else "Metro:"
+            render_score_delta(selected["name"], total, prefix=prefix)
+
+            # Layout: Radar Chart (left) + Score Cards (right)
+            col_left, col_right = st.columns([1.5, 1])
+
+            with col_left:
+                st.markdown("<div style='font-size: 1.1em; font-weight: bold; color: #333; margin-top: -10px; margin-bottom: 5px;'>I. Intelligence Radar</div>", unsafe_allow_html=True)
+
+                fig_r = render_radar_chart(
+                    {"axes": axes, "name": selected["name"]},
+                    None,
+                    AXES_LABELS,
                 )
-                st.plotly_chart(fig_daily, use_container_width=True, config={"displayModeBar": False})
-            else:
-                st.caption("No history data for the selected market yet.")
+                st.plotly_chart(fig_r, use_container_width=True)
+
+            with col_right:
+                st.markdown("<div style='font-size: 0.9em; font-weight: bold; color: #333; margin-top: -10px; margin-bottom: 15px; border-left: 3px solid #2E7BE6; padding-left: 8px;'>II. ANALYSIS SCORE METRICS</div>", unsafe_allow_html=True)
+                # Individual axis score cards
+                for ax_name in AXES_LABELS:
+                    ax_val = axes.get(ax_name, 0)
+                    desc = AXES_DESCRIPTIONS.get(ax_name, "")
+                    st.markdown(f"""
+                    <div style="
+                        background-color: #FFFFFF;
+                        padding: 20px;
+                        border-radius: 12px;
+                        margin-bottom: 12px;
+                        border: 1px solid #E0E0E0;
+                        border-left: 8px solid #2E7BE6;
+                        box-shadow: 2px 2px 5px rgba(0,0,0,0.07);
+                    ">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-size: 1.4em; font-weight: 800; color: #333333;">{ax_name}</span>
+                            <span style="font-size: 1.9em; font-weight: 900; line-height: 1;">
+                                <span style="color: #2E7BE6;">{ax_val}</span>
+                                <span style="color:#bbb;font-size:0.5em;font-weight:600;"> /200</span>
+                            </span>
+                        </div>
+                        <p style="font-size: 1.05em; color: #777777; margin: 0; line-height: 1.3; font-weight: 500;">{desc}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Key metrics
+            st.markdown("#### Key Metrics")
+
+            pti = round(d["median_home_price"] / d["median_income"], 1) if d["median_income"] else 0
+
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                st.metric("Median Home Price", f"${d['median_home_price']:,}")
+                st.metric("Median Income", f"${d['median_income']:,}")
+                st.metric("Price-to-Income Ratio", f"{pti}x")
+            with mc2:
+                st.metric("Unemployment Rate", f"{d['unemployment']}%")
+                st.metric("Population Growth", f"{d['pop_growth']}%")
+                st.metric("Disaster Events (5yr)", d["disaster_freq"])
+            with mc3:
+                st.metric("Rental Yield (Cap Rate)", f"{d['cap_rate']}%")
+                st.metric("5yr Appreciation", f"{d['price_appreciation_5yr']}%")
+                st.metric("Vacancy Rate", f"{d['vacancy_rate']}%")
+            with mc4:
+                st.metric("YoY Price Change", f"{d['yoy_price_change']}%")
+                st.metric("Months of Inventory", f"{d['months_inventory']}")
+                st.metric("Days on Market", f"{d['days_on_market']}")
+
+            # Score History
+            history_data = _load_scores_history()
+            if history_data:
+                st.markdown("#### Score History")
+
+                dates = sorted(history_data.keys())
+                if len(dates) >= 1:
+                    sel_name = selected["name"]
+                    hist_dates = []
+                    hist_values = []
+                    for date in dates:
+                        day_data = history_data[date]
+                        for key, score_val in day_data.items():
+                            if key.startswith(prefix):
+                                market_name = key[len(prefix):]
+                                if view_mode_detail == "States":
+                                    full_name = None
+                                    for fips_info in STATE_FIPS.values():
+                                        if fips_info["abbr"] == market_name:
+                                            full_name = fips_info["name"]
+                                            break
+                                    if full_name is None:
+                                        full_name = market_name
+                                    market_name = full_name
+                                if market_name == sel_name:
+                                    hist_dates.append(date)
+                                    hist_values.append(score_val)
+
+                    if hist_values:
+                        fig_daily = go.Figure()
+                        fig_daily.add_trace(go.Scatter(
+                            x=hist_dates,
+                            y=hist_values,
+                            mode='lines+markers',
+                            line=dict(color='#2E7BE6', width=2),
+                            marker=dict(size=5),
+                            fill='tozeroy',
+                            fillcolor='rgba(46,123,230,0.05)',
+                            name=sel_name,
+                        ))
+                        fig_daily.update_layout(
+                            yaxis=dict(range=[0, 1000], title="Score"),
+                            height=250,
+                            margin=dict(l=0, r=0, t=10, b=0),
+                            plot_bgcolor='white',
+                            hovermode="x unified",
+                            clickmode='none',
+                            dragmode=False,
+                        )
+                        st.plotly_chart(fig_daily, use_container_width=True, config={"displayModeBar": False})
+                    else:
+                        st.caption("No history data for the selected market yet.")
 
 
-# ---------------------------------------------------------------------------
-# Ranking Table
-# ---------------------------------------------------------------------------
-st.markdown("---")
-st.markdown("#### Full Rankings")
+# ===================================================================
+# RANKINGS TAB
+# ===================================================================
+with tab_rankings:
+    view_mode_rank = st.radio("View", ["States", "Metro Areas"], horizontal=True, label_visibility="collapsed", key="rank_view")
 
-table_rows = []
-for i, r in enumerate(rankings, 1):
-    row = {
-        "Rank": i,
-        "Name": r["name"],
-        "Score /1000": r["total"],
-    }
-    for ax in AXES_LABELS:
-        row[f"{ax} /200"] = r["axes"][ax]
-    table_rows.append(row)
+    if view_mode_rank == "States":
+        rank_rankings = state_rankings
+    else:
+        rank_rankings = metro_rankings
 
-df_table = pd.DataFrame(table_rows)
+    if not rank_rankings:
+        st.error("No data available.")
+    else:
+        st.markdown("#### Full Rankings")
 
-st.dataframe(
-    df_table,
-    use_container_width=True,
-    hide_index=True,
-    height=450,
-)
+        table_rows = []
+        for i, r in enumerate(sorted(rank_rankings, key=lambda x: x["total"], reverse=True), 1):
+            row = {
+                "Rank": i,
+                "Name": r["name"],
+                "Score /1000": r["total"],
+            }
+            for ax in AXES_LABELS:
+                row[f"{ax} /200"] = r["axes"][ax]
+            table_rows.append(row)
 
+        df_table = pd.DataFrame(table_rows)
 
-# ---------------------------------------------------------------------------
-# Methodology
-# ---------------------------------------------------------------------------
-with st.expander("Scoring Methodology"):
-    st.markdown("### REALESTATE-1000 Scoring System")
-    st.markdown("Each market is scored on 5 axes, each worth 0-200 points, for a maximum total of 1,000.")
-    st.markdown("")
-    for ax, desc in AXES_DESCRIPTIONS.items():
-        st.markdown(f"**{ax}** (0-200): {desc}")
-    st.markdown("")
-    st.markdown("Data sources: US Census Bureau (ACS 2023), Bureau of Labor Statistics, Redfin, FEMA, Bureau of Economic Analysis.")
-    st.markdown("Scores use proportional scaling. Lower risk = higher Risk Profile score (inverse scoring).")
+        st.dataframe(
+            df_table,
+            use_container_width=True,
+            hide_index=True,
+            height=450,
+        )
+
+        with st.expander("Scoring Methodology"):
+            st.markdown("### REALESTATE-1000 Scoring System")
+            st.markdown("Each market is scored on 5 axes, each worth 0-200 points, for a maximum total of 1,000.")
+            st.markdown("")
+            for ax, desc in AXES_DESCRIPTIONS.items():
+                st.markdown(f"**{ax}** (0-200): {desc}")
+            st.markdown("")
+            st.markdown("Data sources: US Census Bureau (ACS 2023), Bureau of Labor Statistics, Redfin, FEMA, Bureau of Economic Analysis.")
+            st.markdown("Scores use proportional scaling. Lower risk = higher Risk Profile score (inverse scoring).")
