@@ -351,7 +351,7 @@ for i, r in enumerate(rankings, 1):
 df_table = pd.DataFrame(table_rows)
 
 st.dataframe(
-    df_table.style.background_gradient(subset=["Score /1000"], cmap="RdYlGn", vmin=400, vmax=900),
+    df_table,
     use_container_width=True,
     hide_index=True,
     height=450,
