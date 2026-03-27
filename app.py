@@ -503,28 +503,39 @@ with tab_detail:
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Key metrics
-            st.markdown("#### Key Metrics")
+            # Key metrics (snapshot style)
+            st.markdown(
+                "<div style='font-size: 0.9em; font-weight: bold; color: #333; margin-top: 10px; margin-bottom: 15px; border-left: 3px solid #2E7BE6; padding-left: 8px;'>III. KEY METRICS SNAPSHOT</div>",
+                unsafe_allow_html=True,
+            )
 
             pti = round(d["median_home_price"] / d["median_income"], 1) if d["median_income"] else 0
+            home_price = f"${int(d['median_home_price']):,}" if d["median_home_price"] else "N/A"
+            income = f"${int(d['median_income']):,}" if d["median_income"] else "N/A"
 
-            mc1, mc2, mc3, mc4 = st.columns(4)
-            with mc1:
-                st.metric("Median Home Price", f"${d['median_home_price']:,}")
-                st.metric("Median Income", f"${d['median_income']:,}")
-                st.metric("Price-to-Income Ratio", f"{pti}x")
-            with mc2:
-                st.metric("Unemployment Rate", f"{d['unemployment']}%")
-                st.metric("Population Growth", f"{d['pop_growth']}%")
-                st.metric("Disaster Events (5yr)", d["disaster_freq"])
-            with mc3:
-                st.metric("Rental Yield (Cap Rate)", f"{d['cap_rate']}%")
-                st.metric("5yr Appreciation", f"{d['price_appreciation_5yr']}%")
-                st.metric("Vacancy Rate", f"{d['vacancy_rate']}%")
-            with mc4:
-                st.metric("YoY Price Change", f"{d['yoy_price_change']}%")
-                st.metric("Months of Inventory", f"{d['months_inventory']}")
-                st.metric("Days on Market", f"{d['days_on_market']}")
+            snapshot_items = [
+                ("Median Home Price", home_price),
+                ("Median Income", income),
+                ("Price-to-Income", f"{pti}x"),
+                ("Unemployment", f"{d['unemployment']}%"),
+                ("Population Growth", f"{d['pop_growth']}%"),
+                ("Disaster Events (5yr)", str(d["disaster_freq"])),
+                ("Rental Yield", f"{d['cap_rate']}%"),
+                ("5yr Appreciation", f"{d['price_appreciation_5yr']}%"),
+                ("YoY Price Change", f"{d['yoy_price_change']}%"),
+                ("Months of Supply", f"{d['months_inventory']}"),
+                ("Days on Market", f"{d['days_on_market']}"),
+            ]
+
+            snap_cols = st.columns(4)
+            for idx, (label, val) in enumerate(snapshot_items):
+                with snap_cols[idx % 4]:
+                    st.markdown(f"""
+                    <div style="background:#f8fafc; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid #e2e8f0;">
+                        <div style="font-size:0.75em; color:#64748b; font-weight:600;">{label}</div>
+                        <div style="font-size:1.5em; font-weight:900; color:#1e293b; line-height:1.2;">{val}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             # Score History
             history_data = _load_scores_history()
