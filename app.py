@@ -21,6 +21,27 @@ APP_TITLE = "REALESTATE-1000"
 PRIMARY_COLOR = "#2E8B57"
 SCORES_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "scores_history.json")
 
+# State coordinates for map score labels
+STATE_COORDS = {
+    "AL": (32.8, -86.8), "AK": (64.2, -152.5), "AZ": (34.2, -111.7),
+    "AR": (34.8, -92.2), "CA": (37.2, -119.5), "CO": (39.0, -105.5),
+    "CT": (41.6, -72.7), "DE": (39.0, -75.5), "FL": (28.6, -82.4),
+    "GA": (32.7, -83.5), "HI": (20.8, -156.3), "ID": (44.4, -114.6),
+    "IL": (40.0, -89.2), "IN": (39.8, -86.2), "IA": (42.0, -93.5),
+    "KS": (38.5, -98.3), "KY": (37.8, -85.3), "LA": (31.0, -92.0),
+    "ME": (45.4, -69.2), "MD": (39.0, -76.7), "MA": (42.3, -71.8),
+    "MI": (44.3, -85.4), "MN": (46.3, -94.3), "MS": (32.7, -89.7),
+    "MO": (38.4, -92.5), "MT": (47.0, -109.6), "NE": (41.5, -99.8),
+    "NV": (39.3, -116.6), "NH": (43.7, -71.6), "NJ": (40.1, -74.7),
+    "NM": (34.5, -106.0), "NY": (42.9, -75.5), "NC": (35.5, -79.4),
+    "ND": (47.4, -100.5), "OH": (40.4, -82.8), "OK": (35.5, -97.5),
+    "OR": (43.9, -120.6), "PA": (40.9, -77.8), "RI": (41.7, -71.5),
+    "SC": (33.9, -80.9), "SD": (44.4, -100.2), "TN": (35.9, -86.4),
+    "TX": (31.5, -99.3), "UT": (39.3, -111.7), "VT": (44.1, -72.6),
+    "VA": (37.5, -78.9), "WA": (47.4, -120.5), "WV": (38.6, -80.6),
+    "WI": (44.6, -89.8), "WY": (43.0, -107.6), "DC": (38.9, -77.0),
+}
+
 st.set_page_config(page_title=APP_TITLE, page_icon="\U0001f3e0", layout="wide")
 
 # ---------------------------------------------------------------------------
@@ -321,107 +342,6 @@ with tab_dash:
                 unsafe_allow_html=True,
             )
 
-    # US Choropleth Map / Bubble Map
-    st.markdown("<div class='section-title'>Map</div>", unsafe_allow_html=True)
-    scores = [r["total"] for r in rankings]
-
-    if view_mode == "States":
-        df_map = pd.DataFrame([
-            {
-                "abbr": r["abbr"],
-                "name": r["name"],
-                "score": r["total"],
-                "Affordability": r["axes"]["Affordability"],
-                "Momentum": r["axes"]["Market Momentum"],
-                "Economy": r["axes"]["Economic Foundation"],
-                "Risk": r["axes"]["Risk Profile"],
-                "Investment": r["axes"]["Investment Return"],
-            }
-            for r in rankings
-        ])
-
-        fig_map = px.choropleth(
-            df_map,
-            locations="abbr",
-            locationmode="USA-states",
-            color="score",
-            hover_name="name",
-            hover_data={
-                "abbr": False,
-                "score": True,
-                "Affordability": True,
-                "Momentum": True,
-                "Economy": True,
-                "Risk": True,
-                "Investment": True,
-            },
-            color_continuous_scale=[
-                [0, "#d32f2f"],
-                [0.5, "#ffd54f"],
-                [1, "#2e7d32"],
-            ],
-            range_color=[min(scores) - 20, max(scores) + 20],
-            scope="usa",
-            labels={"score": "Total Score"},
-        )
-        fig_map.update_layout(
-            geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=480,
-            coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
-        )
-        st.plotly_chart(fig_map, use_container_width=True)
-
-    else:
-        df_metro = pd.DataFrame([
-            {
-                "name": r["name"],
-                "lat": r["lat"],
-                "lng": r["lng"],
-                "score": r["total"],
-                "state": r["state"],
-                "Affordability": r["axes"]["Affordability"],
-                "Momentum": r["axes"]["Market Momentum"],
-                "Economy": r["axes"]["Economic Foundation"],
-                "Risk": r["axes"]["Risk Profile"],
-                "Investment": r["axes"]["Investment Return"],
-            }
-            for r in rankings
-        ])
-
-        fig_metro = px.scatter_geo(
-            df_metro,
-            lat="lat",
-            lon="lng",
-            size="score",
-            color="score",
-            hover_name="name",
-            hover_data={
-                "lat": False, "lng": False, "state": True,
-                "score": True,
-                "Affordability": True,
-                "Momentum": True,
-                "Economy": True,
-                "Risk": True,
-                "Investment": True,
-            },
-            color_continuous_scale=[
-                [0, "#d32f2f"],
-                [0.5, "#ffd54f"],
-                [1, "#2e7d32"],
-            ],
-            range_color=[min(scores) - 20, max(scores) + 20],
-            scope="usa",
-            size_max=25,
-            labels={"score": "Total Score"},
-        )
-        fig_metro.update_layout(
-            geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=480,
-            coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
-        )
-        st.plotly_chart(fig_metro, use_container_width=True)
 
 
 # ===================================================================
@@ -439,7 +359,138 @@ with tab_detail:
         st.error("No data available.")
     else:
         name_list = [r["name"] for r in detail_rankings]
-        selected_name = st.selectbox("Select a market to view details", name_list)
+
+        # ----- Map at top of Market Detail -----
+        _map_event = None
+        scores_detail = [r["total"] for r in detail_rankings]
+
+        if view_mode_detail == "States":
+            _abbrs = [r["abbr"] for r in detail_rankings]
+            _totals = [r["total"] for r in detail_rankings]
+            _hovers = [f"{r['name']} ({r['abbr']})" for r in detail_rankings]
+
+            fig_map = go.Figure()
+            fig_map.add_trace(go.Choropleth(
+                locations=_abbrs,
+                locationmode="USA-states",
+                z=_totals,
+                colorscale=[
+                    [0, "#d32f2f"],
+                    [0.5, "#ffd54f"],
+                    [1, "#2e7d32"],
+                ],
+                zmin=min(scores_detail) - 20,
+                zmax=max(scores_detail) + 20,
+                text=_hovers,
+                hoverinfo="text",
+                colorbar=dict(title="Score", thickness=15, len=0.6),
+            ))
+
+            # Score labels on each state
+            _lats = []
+            _lons = []
+            _labels = []
+            for r in detail_rankings:
+                coords = STATE_COORDS.get(r["abbr"])
+                if coords:
+                    _lats.append(coords[0])
+                    _lons.append(coords[1])
+                    _labels.append(str(r["total"]))
+
+            if _lats:
+                fig_map.add_trace(go.Scattergeo(
+                    locationmode="USA-states",
+                    lat=_lats,
+                    lon=_lons,
+                    text=_labels,
+                    mode="markers+text",
+                    marker=dict(size=32, color="white", opacity=0.85, line=dict(width=0)),
+                    textfont=dict(size=10, color="#1e293b", family="Arial Black"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                ))
+
+            fig_map.update_layout(
+                geo=dict(scope="usa", bgcolor="rgba(0,0,0,0)", lakecolor="#E8F4FD"),
+                margin=dict(l=0, r=0, t=0, b=0),
+                height=500,
+                paper_bgcolor="white",
+                dragmode=False,
+            )
+            fig_map.update_geos(projection_type="albers usa")
+            _map_event = st.plotly_chart(fig_map, use_container_width=True, config={
+                "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
+            }, on_select="rerun", key="state_map_detail")
+
+        else:
+            # Metro bubble map
+            df_metro = pd.DataFrame([
+                {
+                    "name": r["name"],
+                    "lat": r["lat"],
+                    "lng": r["lng"],
+                    "score": r["total"],
+                    "state": r["state"],
+                    "Affordability": r["axes"]["Affordability"],
+                    "Momentum": r["axes"]["Market Momentum"],
+                    "Economy": r["axes"]["Economic Foundation"],
+                    "Risk": r["axes"]["Risk Profile"],
+                    "Investment": r["axes"]["Investment Return"],
+                }
+                for r in detail_rankings
+            ])
+
+            fig_metro = px.scatter_geo(
+                df_metro,
+                lat="lat",
+                lon="lng",
+                size="score",
+                color="score",
+                hover_name="name",
+                hover_data={
+                    "lat": False, "lng": False, "state": True,
+                    "score": True,
+                    "Affordability": True,
+                    "Momentum": True,
+                    "Economy": True,
+                    "Risk": True,
+                    "Investment": True,
+                },
+                color_continuous_scale=[
+                    [0, "#d32f2f"],
+                    [0.5, "#ffd54f"],
+                    [1, "#2e7d32"],
+                ],
+                range_color=[min(scores_detail) - 20, max(scores_detail) + 20],
+                scope="usa",
+                size_max=25,
+                labels={"score": "Total Score"},
+            )
+            fig_metro.update_layout(
+                geo=dict(bgcolor='rgba(0,0,0,0)', lakecolor='#E8F4FD'),
+                margin=dict(l=0, r=0, t=0, b=0),
+                height=480,
+                dragmode=False,
+                coloraxis_colorbar=dict(title="Score", thickness=15, len=0.6),
+            )
+            st.plotly_chart(fig_metro, use_container_width=True, config={
+                "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
+            })
+
+        # Handle map click to update selectbox (States choropleth only)
+        if _map_event:
+            try:
+                _points = _map_event.selection.points
+                if _points:
+                    _clicked_loc = _points[0].get("location", "")
+                    for r in detail_rankings:
+                        if r["abbr"] == _clicked_loc:
+                            st.session_state["market_detail_select"] = r["name"]
+                            break
+            except Exception:
+                pass
+
+        selected_name = st.selectbox("Select a market to view details", name_list, key="market_detail_select")
         selected = next((r for r in detail_rankings if r["name"] == selected_name), None)
 
         if selected:
