@@ -1,5 +1,5 @@
 # data_logic.py
-"""REALESTATE-1000 scoring logic with realistic static data for all 50 US states + DC and top 30 metro areas."""
+"""REALESTATE-1000 scoring logic with REAL API data for all 50 US states + DC."""
 
 try:
     import streamlit as st
@@ -8,6 +8,15 @@ except ImportError:
     st = _types.ModuleType("streamlit")
     st.cache_data = lambda **kwargs: (lambda fn: fn)
     st.secrets = {}
+
+import pandas as pd
+import numpy as np
+import requests
+import gzip
+import io
+import json
+import os
+import time
 
 # ---------------------------------------------------------------------------
 # State FIPS codes (50 states + DC)
@@ -66,6 +75,15 @@ STATE_FIPS = {
     "56": {"name": "Wyoming", "abbr": "WY"},
 }
 
+# Reverse lookup: abbreviation -> FIPS code
+_ABBR_TO_FIPS = {v["abbr"]: k for k, v in STATE_FIPS.items()}
+
+# Census state FIPS -> abbreviation mapping
+_FIPS_TO_ABBR = {k: v["abbr"] for k, v in STATE_FIPS.items()}
+
+# Redfin uses full state names; map name -> abbreviation
+_NAME_TO_ABBR = {v["name"]: v["abbr"] for v in STATE_FIPS.values()}
+
 AXES_LABELS = [
     "Affordability",
     "Market Momentum",
@@ -76,972 +94,821 @@ AXES_LABELS = [
 
 AXES_DESCRIPTIONS = {
     "Affordability": "Home price-to-income ratio, mortgage burden, rent-to-income ratio. More affordable = higher score.",
-    "Market Momentum": "YoY price appreciation, months of inventory, days on market. Healthy growth = higher score.",
-    "Economic Foundation": "Unemployment rate, job growth, GDP per capita growth, population growth.",
-    "Risk Profile": "Disaster frequency, flood zones, insurance costs, foreclosure rate. Lower risk = higher score.",
-    "Investment Return": "Cap rate, 5-year appreciation, rent growth, vacancy rate.",
+    "Market Momentum": "YoY price appreciation, months of inventory, days on market, sale-to-list ratio. Healthy growth = higher score.",
+    "Economic Foundation": "Unemployment rate, population growth, GDP growth (if available). Stronger economy = higher score.",
+    "Risk Profile": "FEMA disaster frequency (5yr). Lower risk = higher score (inverse scoring).",
+    "Investment Return": "Rental yield, 5-year price appreciation. Higher returns = higher score.",
 }
 
-# ---------------------------------------------------------------------------
-# Realistic state-level real estate data
-# Based on Zillow, Census ACS, BLS, FEMA data (2025 approximations)
-# ---------------------------------------------------------------------------
-# Fields:
-#   median_home_price: Median home price in USD
-#   median_income: Median household income in USD
-#   mortgage_rate: Current 30yr fixed rate (national ~6.8%)
-#   rent_median: Median monthly rent
-#   yoy_price_change: Year-over-year home price change (%)
-#   months_inventory: Months of housing supply
-#   days_on_market: Median days on market
-#   unemployment: Unemployment rate (%)
-#   job_growth: YoY job growth (%)
-#   gdp_growth: GDP per capita growth (%)
-#   pop_growth: Population growth (%)
-#   disaster_freq: FEMA disaster declarations (5-year count)
-#   flood_zone_pct: % of land in flood zone
-#   insurance_index: Relative insurance cost (100 = national average)
-#   foreclosure_rate: Foreclosure rate (%)
-#   cap_rate: Rental cap rate (%)
-#   price_appreciation_5yr: 5-year cumulative price appreciation (%)
-#   rent_growth: YoY rent growth (%)
-#   vacancy_rate: Rental vacancy rate (%)
-
-STATES_DATA = {
-    "AL": {
-        "median_home_price": 215000, "median_income": 56950, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 3.2, "months_inventory": 4.1,
-        "days_on_market": 52, "unemployment": 3.1, "job_growth": 1.8,
-        "gdp_growth": 2.1, "pop_growth": 0.3, "disaster_freq": 18,
-        "flood_zone_pct": 8.5, "insurance_index": 115, "foreclosure_rate": 0.5,
-        "cap_rate": 6.8, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 7.2,
-    },
-    "AK": {
-        "median_home_price": 310000, "median_income": 77790, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 1.5, "months_inventory": 5.8,
-        "days_on_market": 78, "unemployment": 4.8, "job_growth": 0.5,
-        "gdp_growth": 0.8, "pop_growth": -0.4, "disaster_freq": 12,
-        "flood_zone_pct": 5.0, "insurance_index": 130, "foreclosure_rate": 0.6,
-        "cap_rate": 5.2, "price_appreciation_5yr": 18, "rent_growth": 1.8, "vacancy_rate": 9.5,
-    },
-    "AZ": {
-        "median_home_price": 395000, "median_income": 68950, "mortgage_rate": 6.8,
-        "rent_median": 1450, "yoy_price_change": 2.8, "months_inventory": 4.5,
-        "days_on_market": 45, "unemployment": 3.6, "job_growth": 2.8,
-        "gdp_growth": 3.5, "pop_growth": 1.6, "disaster_freq": 8,
-        "flood_zone_pct": 3.2, "insurance_index": 95, "foreclosure_rate": 0.4,
-        "cap_rate": 5.5, "price_appreciation_5yr": 55, "rent_growth": 3.2, "vacancy_rate": 5.8,
-    },
-    "AR": {
-        "median_home_price": 175000, "median_income": 52120, "mortgage_rate": 6.8,
-        "rent_median": 810, "yoy_price_change": 4.1, "months_inventory": 3.8,
-        "days_on_market": 48, "unemployment": 3.4, "job_growth": 1.5,
-        "gdp_growth": 1.8, "pop_growth": 0.2, "disaster_freq": 16,
-        "flood_zone_pct": 9.0, "insurance_index": 120, "foreclosure_rate": 0.5,
-        "cap_rate": 7.5, "price_appreciation_5yr": 48, "rent_growth": 4.0, "vacancy_rate": 7.5,
-    },
-    "CA": {
-        "median_home_price": 785000, "median_income": 84910, "mortgage_rate": 6.8,
-        "rent_median": 2150, "yoy_price_change": 4.5, "months_inventory": 2.8,
-        "days_on_market": 30, "unemployment": 4.9, "job_growth": 1.2,
-        "gdp_growth": 3.2, "pop_growth": -0.1, "disaster_freq": 22,
-        "flood_zone_pct": 4.5, "insurance_index": 140, "foreclosure_rate": 0.3,
-        "cap_rate": 4.2, "price_appreciation_5yr": 38, "rent_growth": 4.5, "vacancy_rate": 4.2,
-    },
-    "CO": {
-        "median_home_price": 530000, "median_income": 82250, "mortgage_rate": 6.8,
-        "rent_median": 1750, "yoy_price_change": 2.1, "months_inventory": 4.2,
-        "days_on_market": 38, "unemployment": 3.4, "job_growth": 2.2,
-        "gdp_growth": 3.0, "pop_growth": 0.8, "disaster_freq": 10,
-        "flood_zone_pct": 3.8, "insurance_index": 110, "foreclosure_rate": 0.3,
-        "cap_rate": 4.8, "price_appreciation_5yr": 35, "rent_growth": 2.8, "vacancy_rate": 5.0,
-    },
-    "CT": {
-        "median_home_price": 380000, "median_income": 83780, "mortgage_rate": 6.8,
-        "rent_median": 1400, "yoy_price_change": 7.5, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 3.8, "job_growth": 1.0,
-        "gdp_growth": 2.0, "pop_growth": -0.1, "disaster_freq": 8,
-        "flood_zone_pct": 6.5, "insurance_index": 115, "foreclosure_rate": 0.4,
-        "cap_rate": 5.5, "price_appreciation_5yr": 52, "rent_growth": 5.0, "vacancy_rate": 5.5,
-    },
-    "DE": {
-        "median_home_price": 340000, "median_income": 72720, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 5.2, "months_inventory": 3.2,
-        "days_on_market": 35, "unemployment": 3.9, "job_growth": 1.3,
-        "gdp_growth": 2.2, "pop_growth": 0.5, "disaster_freq": 7,
-        "flood_zone_pct": 10.0, "insurance_index": 100, "foreclosure_rate": 0.5,
-        "cap_rate": 5.8, "price_appreciation_5yr": 45, "rent_growth": 3.8, "vacancy_rate": 6.0,
-    },
-    "DC": {
-        "median_home_price": 645000, "median_income": 101720, "mortgage_rate": 6.8,
-        "rent_median": 2100, "yoy_price_change": 3.0, "months_inventory": 3.5,
-        "days_on_market": 32, "unemployment": 4.5, "job_growth": 1.5,
-        "gdp_growth": 2.8, "pop_growth": 0.1, "disaster_freq": 3,
-        "flood_zone_pct": 5.0, "insurance_index": 95, "foreclosure_rate": 0.3,
-        "cap_rate": 4.5, "price_appreciation_5yr": 28, "rent_growth": 2.5, "vacancy_rate": 6.8,
-    },
-    "FL": {
-        "median_home_price": 395000, "median_income": 63420, "mortgage_rate": 6.8,
-        "rent_median": 1650, "yoy_price_change": 3.5, "months_inventory": 5.2,
-        "days_on_market": 55, "unemployment": 3.2, "job_growth": 2.5,
-        "gdp_growth": 3.2, "pop_growth": 1.5, "disaster_freq": 28,
-        "flood_zone_pct": 15.0, "insurance_index": 195, "foreclosure_rate": 0.5,
-        "cap_rate": 5.8, "price_appreciation_5yr": 58, "rent_growth": 4.0, "vacancy_rate": 6.5,
-    },
-    "GA": {
-        "median_home_price": 315000, "median_income": 65030, "mortgage_rate": 6.8,
-        "rent_median": 1350, "yoy_price_change": 3.8, "months_inventory": 3.8,
-        "days_on_market": 40, "unemployment": 3.3, "job_growth": 2.5,
-        "gdp_growth": 3.0, "pop_growth": 0.9, "disaster_freq": 14,
-        "flood_zone_pct": 6.5, "insurance_index": 110, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 50, "rent_growth": 3.5, "vacancy_rate": 6.0,
-    },
-    "HI": {
-        "median_home_price": 835000, "median_income": 84600, "mortgage_rate": 6.8,
-        "rent_median": 2200, "yoy_price_change": 4.0, "months_inventory": 3.8,
-        "days_on_market": 42, "unemployment": 3.0, "job_growth": 1.8,
-        "gdp_growth": 2.5, "pop_growth": -0.3, "disaster_freq": 10,
-        "flood_zone_pct": 8.0, "insurance_index": 145, "foreclosure_rate": 0.2,
-        "cap_rate": 4.0, "price_appreciation_5yr": 32, "rent_growth": 3.5, "vacancy_rate": 5.5,
-    },
-    "ID": {
-        "median_home_price": 430000, "median_income": 64520, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 3.5, "months_inventory": 4.5,
-        "days_on_market": 42, "unemployment": 3.0, "job_growth": 3.2,
-        "gdp_growth": 4.0, "pop_growth": 2.2, "disaster_freq": 6,
-        "flood_zone_pct": 2.5, "insurance_index": 85, "foreclosure_rate": 0.2,
-        "cap_rate": 5.0, "price_appreciation_5yr": 68, "rent_growth": 4.5, "vacancy_rate": 4.0,
-    },
-    "IL": {
-        "median_home_price": 255000, "median_income": 72200, "mortgage_rate": 6.8,
-        "rent_median": 1200, "yoy_price_change": 5.0, "months_inventory": 3.0,
-        "days_on_market": 30, "unemployment": 4.5, "job_growth": 0.8,
-        "gdp_growth": 1.8, "pop_growth": -0.3, "disaster_freq": 14,
-        "flood_zone_pct": 7.0, "insurance_index": 105, "foreclosure_rate": 0.6,
-        "cap_rate": 6.5, "price_appreciation_5yr": 35, "rent_growth": 3.5, "vacancy_rate": 6.5,
-    },
-    "IN": {
-        "median_home_price": 225000, "median_income": 61940, "mortgage_rate": 6.8,
-        "rent_median": 1000, "yoy_price_change": 5.5, "months_inventory": 2.8,
-        "days_on_market": 28, "unemployment": 3.3, "job_growth": 1.5,
-        "gdp_growth": 2.2, "pop_growth": 0.3, "disaster_freq": 12,
-        "flood_zone_pct": 7.5, "insurance_index": 100, "foreclosure_rate": 0.5,
-        "cap_rate": 7.0, "price_appreciation_5yr": 52, "rent_growth": 4.5, "vacancy_rate": 6.0,
-    },
-    "IA": {
-        "median_home_price": 195000, "median_income": 65570, "mortgage_rate": 6.8,
-        "rent_median": 880, "yoy_price_change": 4.5, "months_inventory": 3.2,
-        "days_on_market": 38, "unemployment": 2.8, "job_growth": 1.0,
-        "gdp_growth": 1.5, "pop_growth": 0.0, "disaster_freq": 15,
-        "flood_zone_pct": 10.0, "insurance_index": 95, "foreclosure_rate": 0.4,
-        "cap_rate": 7.2, "price_appreciation_5yr": 38, "rent_growth": 3.0, "vacancy_rate": 6.8,
-    },
-    "KS": {
-        "median_home_price": 205000, "median_income": 64520, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 4.0, "months_inventory": 3.0,
-        "days_on_market": 35, "unemployment": 2.9, "job_growth": 1.2,
-        "gdp_growth": 1.8, "pop_growth": 0.1, "disaster_freq": 18,
-        "flood_zone_pct": 6.0, "insurance_index": 115, "foreclosure_rate": 0.4,
-        "cap_rate": 7.0, "price_appreciation_5yr": 40, "rent_growth": 3.2, "vacancy_rate": 7.0,
-    },
-    "KY": {
-        "median_home_price": 195000, "median_income": 55580, "mortgage_rate": 6.8,
-        "rent_median": 880, "yoy_price_change": 5.0, "months_inventory": 3.0,
-        "days_on_market": 35, "unemployment": 3.8, "job_growth": 1.2,
-        "gdp_growth": 1.5, "pop_growth": 0.1, "disaster_freq": 14,
-        "flood_zone_pct": 8.0, "insurance_index": 105, "foreclosure_rate": 0.5,
-        "cap_rate": 7.2, "price_appreciation_5yr": 45, "rent_growth": 4.0, "vacancy_rate": 6.5,
-    },
-    "LA": {
-        "median_home_price": 195000, "median_income": 52290, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 2.0, "months_inventory": 5.0,
-        "days_on_market": 65, "unemployment": 4.2, "job_growth": 0.8,
-        "gdp_growth": 1.0, "pop_growth": -0.3, "disaster_freq": 25,
-        "flood_zone_pct": 18.0, "insurance_index": 180, "foreclosure_rate": 0.7,
-        "cap_rate": 7.5, "price_appreciation_5yr": 22, "rent_growth": 2.0, "vacancy_rate": 8.5,
-    },
-    "ME": {
-        "median_home_price": 355000, "median_income": 64770, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 7.0, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 3.0, "job_growth": 0.8,
-        "gdp_growth": 1.5, "pop_growth": 0.3, "disaster_freq": 6,
-        "flood_zone_pct": 5.5, "insurance_index": 90, "foreclosure_rate": 0.3,
-        "cap_rate": 5.5, "price_appreciation_5yr": 62, "rent_growth": 6.0, "vacancy_rate": 4.5,
-    },
-    "MD": {
-        "median_home_price": 380000, "median_income": 90200, "mortgage_rate": 6.8,
-        "rent_median": 1600, "yoy_price_change": 4.5, "months_inventory": 2.8,
-        "days_on_market": 25, "unemployment": 3.5, "job_growth": 1.5,
-        "gdp_growth": 2.5, "pop_growth": 0.2, "disaster_freq": 8,
-        "flood_zone_pct": 8.0, "insurance_index": 100, "foreclosure_rate": 0.4,
-        "cap_rate": 5.5, "price_appreciation_5yr": 38, "rent_growth": 3.5, "vacancy_rate": 5.5,
-    },
-    "MA": {
-        "median_home_price": 595000, "median_income": 89640, "mortgage_rate": 6.8,
-        "rent_median": 1950, "yoy_price_change": 6.5, "months_inventory": 1.8,
-        "days_on_market": 22, "unemployment": 3.5, "job_growth": 1.2,
-        "gdp_growth": 3.0, "pop_growth": 0.1, "disaster_freq": 7,
-        "flood_zone_pct": 7.0, "insurance_index": 110, "foreclosure_rate": 0.2,
-        "cap_rate": 4.5, "price_appreciation_5yr": 48, "rent_growth": 5.5, "vacancy_rate": 3.8,
-    },
-    "MI": {
-        "median_home_price": 225000, "median_income": 63200, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 5.5, "months_inventory": 2.8,
-        "days_on_market": 30, "unemployment": 4.0, "job_growth": 1.0,
-        "gdp_growth": 1.5, "pop_growth": 0.0, "disaster_freq": 10,
-        "flood_zone_pct": 5.5, "insurance_index": 105, "foreclosure_rate": 0.5,
-        "cap_rate": 7.2, "price_appreciation_5yr": 48, "rent_growth": 4.5, "vacancy_rate": 6.2,
-    },
-    "MN": {
-        "median_home_price": 325000, "median_income": 77720, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 3.5, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 2.8, "job_growth": 1.5,
-        "gdp_growth": 2.5, "pop_growth": 0.4, "disaster_freq": 10,
-        "flood_zone_pct": 6.0, "insurance_index": 100, "foreclosure_rate": 0.3,
-        "cap_rate": 5.8, "price_appreciation_5yr": 38, "rent_growth": 3.0, "vacancy_rate": 4.8,
-    },
-    "MS": {
-        "median_home_price": 160000, "median_income": 48610, "mortgage_rate": 6.8,
-        "rent_median": 800, "yoy_price_change": 3.5, "months_inventory": 4.8,
-        "days_on_market": 58, "unemployment": 3.8, "job_growth": 0.8,
-        "gdp_growth": 1.0, "pop_growth": -0.2, "disaster_freq": 20,
-        "flood_zone_pct": 12.0, "insurance_index": 150, "foreclosure_rate": 0.6,
-        "cap_rate": 8.0, "price_appreciation_5yr": 38, "rent_growth": 3.0, "vacancy_rate": 8.8,
-    },
-    "MO": {
-        "median_home_price": 220000, "median_income": 60590, "mortgage_rate": 6.8,
-        "rent_median": 1000, "yoy_price_change": 4.2, "months_inventory": 3.2,
-        "days_on_market": 35, "unemployment": 3.0, "job_growth": 1.2,
-        "gdp_growth": 1.8, "pop_growth": 0.1, "disaster_freq": 16,
-        "flood_zone_pct": 7.5, "insurance_index": 110, "foreclosure_rate": 0.4,
-        "cap_rate": 7.0, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 6.5,
-    },
-    "MT": {
-        "median_home_price": 430000, "median_income": 60560, "mortgage_rate": 6.8,
-        "rent_median": 1150, "yoy_price_change": 2.0, "months_inventory": 5.5,
-        "days_on_market": 62, "unemployment": 2.8, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 1.0, "disaster_freq": 8,
-        "flood_zone_pct": 2.0, "insurance_index": 90, "foreclosure_rate": 0.2,
-        "cap_rate": 4.8, "price_appreciation_5yr": 58, "rent_growth": 3.0, "vacancy_rate": 4.5,
-    },
-    "NE": {
-        "median_home_price": 240000, "median_income": 66640, "mortgage_rate": 6.8,
-        "rent_median": 1000, "yoy_price_change": 5.0, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 2.5, "job_growth": 1.2,
-        "gdp_growth": 2.0, "pop_growth": 0.3, "disaster_freq": 14,
-        "flood_zone_pct": 6.5, "insurance_index": 105, "foreclosure_rate": 0.3,
-        "cap_rate": 6.5, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 5.5,
-    },
-    "NV": {
-        "median_home_price": 420000, "median_income": 66830, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 4.0, "months_inventory": 4.0,
-        "days_on_market": 42, "unemployment": 5.2, "job_growth": 2.5,
-        "gdp_growth": 3.5, "pop_growth": 1.2, "disaster_freq": 4,
-        "flood_zone_pct": 1.5, "insurance_index": 85, "foreclosure_rate": 0.5,
-        "cap_rate": 5.5, "price_appreciation_5yr": 48, "rent_growth": 4.0, "vacancy_rate": 6.0,
-    },
-    "NH": {
-        "median_home_price": 440000, "median_income": 83450, "mortgage_rate": 6.8,
-        "rent_median": 1550, "yoy_price_change": 8.0, "months_inventory": 1.5,
-        "days_on_market": 20, "unemployment": 2.5, "job_growth": 1.5,
-        "gdp_growth": 2.5, "pop_growth": 0.5, "disaster_freq": 5,
-        "flood_zone_pct": 4.0, "insurance_index": 90, "foreclosure_rate": 0.2,
-        "cap_rate": 5.0, "price_appreciation_5yr": 58, "rent_growth": 6.0, "vacancy_rate": 3.5,
-    },
-    "NJ": {
-        "median_home_price": 480000, "median_income": 89290, "mortgage_rate": 6.8,
-        "rent_median": 1650, "yoy_price_change": 7.0, "months_inventory": 2.2,
-        "days_on_market": 28, "unemployment": 4.0, "job_growth": 1.2,
-        "gdp_growth": 2.2, "pop_growth": 0.1, "disaster_freq": 10,
-        "flood_zone_pct": 9.0, "insurance_index": 120, "foreclosure_rate": 0.5,
-        "cap_rate": 5.2, "price_appreciation_5yr": 48, "rent_growth": 5.0, "vacancy_rate": 4.8,
-    },
-    "NM": {
-        "median_home_price": 275000, "median_income": 53980, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 3.0, "months_inventory": 4.5,
-        "days_on_market": 52, "unemployment": 4.0, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 0.2, "disaster_freq": 8,
-        "flood_zone_pct": 2.0, "insurance_index": 90, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 40, "rent_growth": 3.0, "vacancy_rate": 7.0,
-    },
-    "NY": {
-        "median_home_price": 420000, "median_income": 74310, "mortgage_rate": 6.8,
-        "rent_median": 1650, "yoy_price_change": 5.5, "months_inventory": 3.5,
-        "days_on_market": 55, "unemployment": 4.2, "job_growth": 1.0,
-        "gdp_growth": 2.5, "pop_growth": -0.5, "disaster_freq": 12,
-        "flood_zone_pct": 7.0, "insurance_index": 115, "foreclosure_rate": 0.5,
-        "cap_rate": 5.2, "price_appreciation_5yr": 35, "rent_growth": 4.0, "vacancy_rate": 5.5,
-    },
-    "NC": {
-        "median_home_price": 325000, "median_income": 63770, "mortgage_rate": 6.8,
-        "rent_median": 1300, "yoy_price_change": 5.0, "months_inventory": 3.0,
-        "days_on_market": 32, "unemployment": 3.5, "job_growth": 2.5,
-        "gdp_growth": 3.0, "pop_growth": 1.0, "disaster_freq": 12,
-        "flood_zone_pct": 7.0, "insurance_index": 105, "foreclosure_rate": 0.3,
-        "cap_rate": 5.8, "price_appreciation_5yr": 52, "rent_growth": 4.0, "vacancy_rate": 5.2,
-    },
-    "ND": {
-        "median_home_price": 240000, "median_income": 68120, "mortgage_rate": 6.8,
-        "rent_median": 900, "yoy_price_change": 2.0, "months_inventory": 5.0,
-        "days_on_market": 65, "unemployment": 2.2, "job_growth": 0.5,
-        "gdp_growth": 1.0, "pop_growth": -0.2, "disaster_freq": 12,
-        "flood_zone_pct": 8.0, "insurance_index": 100, "foreclosure_rate": 0.3,
-        "cap_rate": 6.5, "price_appreciation_5yr": 18, "rent_growth": 1.5, "vacancy_rate": 8.0,
-    },
-    "OH": {
-        "median_home_price": 210000, "median_income": 60110, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 5.5, "months_inventory": 2.5,
-        "days_on_market": 25, "unemployment": 3.8, "job_growth": 0.8,
-        "gdp_growth": 1.5, "pop_growth": -0.1, "disaster_freq": 12,
-        "flood_zone_pct": 6.0, "insurance_index": 95, "foreclosure_rate": 0.5,
-        "cap_rate": 7.5, "price_appreciation_5yr": 48, "rent_growth": 4.5, "vacancy_rate": 5.8,
-    },
-    "OK": {
-        "median_home_price": 195000, "median_income": 56950, "mortgage_rate": 6.8,
-        "rent_median": 900, "yoy_price_change": 3.0, "months_inventory": 3.8,
-        "days_on_market": 42, "unemployment": 3.2, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 0.3, "disaster_freq": 22,
-        "flood_zone_pct": 5.5, "insurance_index": 135, "foreclosure_rate": 0.5,
-        "cap_rate": 7.5, "price_appreciation_5yr": 38, "rent_growth": 3.0, "vacancy_rate": 7.5,
-    },
-    "OR": {
-        "median_home_price": 480000, "median_income": 71430, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 1.5, "months_inventory": 4.5,
-        "days_on_market": 48, "unemployment": 4.0, "job_growth": 1.2,
-        "gdp_growth": 2.5, "pop_growth": 0.5, "disaster_freq": 8,
-        "flood_zone_pct": 4.0, "insurance_index": 90, "foreclosure_rate": 0.3,
-        "cap_rate": 4.8, "price_appreciation_5yr": 32, "rent_growth": 2.5, "vacancy_rate": 4.5,
-    },
-    "PA": {
-        "median_home_price": 260000, "median_income": 67580, "mortgage_rate": 6.8,
-        "rent_median": 1150, "yoy_price_change": 5.5, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 3.8, "job_growth": 0.8,
-        "gdp_growth": 1.8, "pop_growth": 0.0, "disaster_freq": 10,
-        "flood_zone_pct": 5.5, "insurance_index": 95, "foreclosure_rate": 0.4,
-        "cap_rate": 6.5, "price_appreciation_5yr": 42, "rent_growth": 4.0, "vacancy_rate": 5.5,
-    },
-    "RI": {
-        "median_home_price": 410000, "median_income": 71160, "mortgage_rate": 6.8,
-        "rent_median": 1400, "yoy_price_change": 8.5, "months_inventory": 1.8,
-        "days_on_market": 22, "unemployment": 3.5, "job_growth": 1.0,
-        "gdp_growth": 1.8, "pop_growth": 0.0, "disaster_freq": 6,
-        "flood_zone_pct": 8.0, "insurance_index": 110, "foreclosure_rate": 0.3,
-        "cap_rate": 5.5, "price_appreciation_5yr": 62, "rent_growth": 6.5, "vacancy_rate": 4.0,
-    },
-    "SC": {
-        "median_home_price": 290000, "median_income": 59320, "mortgage_rate": 6.8,
-        "rent_median": 1200, "yoy_price_change": 5.5, "months_inventory": 3.5,
-        "days_on_market": 38, "unemployment": 3.2, "job_growth": 2.2,
-        "gdp_growth": 2.8, "pop_growth": 1.2, "disaster_freq": 14,
-        "flood_zone_pct": 8.0, "insurance_index": 120, "foreclosure_rate": 0.4,
-        "cap_rate": 6.2, "price_appreciation_5yr": 55, "rent_growth": 4.5, "vacancy_rate": 5.5,
-    },
-    "SD": {
-        "median_home_price": 285000, "median_income": 63920, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 4.0, "months_inventory": 3.5,
-        "days_on_market": 42, "unemployment": 2.2, "job_growth": 1.0,
-        "gdp_growth": 1.8, "pop_growth": 0.5, "disaster_freq": 12,
-        "flood_zone_pct": 5.0, "insurance_index": 105, "foreclosure_rate": 0.2,
-        "cap_rate": 6.0, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 5.8,
-    },
-    "TN": {
-        "median_home_price": 310000, "median_income": 59700, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 3.8, "months_inventory": 3.5,
-        "days_on_market": 38, "unemployment": 3.2, "job_growth": 2.2,
-        "gdp_growth": 2.8, "pop_growth": 0.8, "disaster_freq": 14,
-        "flood_zone_pct": 6.5, "insurance_index": 110, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 55, "rent_growth": 4.0, "vacancy_rate": 5.8,
-    },
-    "TX": {
-        "median_home_price": 295000, "median_income": 67680, "mortgage_rate": 6.8,
-        "rent_median": 1350, "yoy_price_change": 1.5, "months_inventory": 4.8,
-        "days_on_market": 52, "unemployment": 3.8, "job_growth": 2.8,
-        "gdp_growth": 3.5, "pop_growth": 1.5, "disaster_freq": 20,
-        "flood_zone_pct": 8.0, "insurance_index": 140, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 35, "rent_growth": 2.0, "vacancy_rate": 7.0,
-    },
-    "UT": {
-        "median_home_price": 480000, "median_income": 78530, "mortgage_rate": 6.8,
-        "rent_median": 1450, "yoy_price_change": 3.0, "months_inventory": 4.0,
-        "days_on_market": 38, "unemployment": 2.8, "job_growth": 3.5,
-        "gdp_growth": 4.2, "pop_growth": 1.8, "disaster_freq": 5,
-        "flood_zone_pct": 1.5, "insurance_index": 80, "foreclosure_rate": 0.2,
-        "cap_rate": 4.8, "price_appreciation_5yr": 48, "rent_growth": 3.0, "vacancy_rate": 4.0,
-    },
-    "VT": {
-        "median_home_price": 350000, "median_income": 65440, "mortgage_rate": 6.8,
-        "rent_median": 1300, "yoy_price_change": 8.0, "months_inventory": 1.5,
-        "days_on_market": 20, "unemployment": 2.2, "job_growth": 0.5,
-        "gdp_growth": 1.2, "pop_growth": 0.2, "disaster_freq": 5,
-        "flood_zone_pct": 4.0, "insurance_index": 85, "foreclosure_rate": 0.2,
-        "cap_rate": 5.5, "price_appreciation_5yr": 58, "rent_growth": 6.0, "vacancy_rate": 3.5,
-    },
-    "VA": {
-        "median_home_price": 380000, "median_income": 80590, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 4.5, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 2.8, "job_growth": 1.8,
-        "gdp_growth": 2.8, "pop_growth": 0.5, "disaster_freq": 10,
-        "flood_zone_pct": 6.0, "insurance_index": 95, "foreclosure_rate": 0.3,
-        "cap_rate": 5.5, "price_appreciation_5yr": 40, "rent_growth": 3.5, "vacancy_rate": 5.0,
-    },
-    "WA": {
-        "median_home_price": 575000, "median_income": 84250, "mortgage_rate": 6.8,
-        "rent_median": 1800, "yoy_price_change": 3.0, "months_inventory": 3.2,
-        "days_on_market": 25, "unemployment": 3.8, "job_growth": 2.0,
-        "gdp_growth": 3.5, "pop_growth": 0.8, "disaster_freq": 8,
-        "flood_zone_pct": 4.5, "insurance_index": 90, "foreclosure_rate": 0.2,
-        "cap_rate": 4.5, "price_appreciation_5yr": 35, "rent_growth": 3.5, "vacancy_rate": 4.5,
-    },
-    "WV": {
-        "median_home_price": 130000, "median_income": 48040, "mortgage_rate": 6.8,
-        "rent_median": 750, "yoy_price_change": 5.0, "months_inventory": 5.5,
-        "days_on_market": 72, "unemployment": 4.5, "job_growth": -0.2,
-        "gdp_growth": 0.5, "pop_growth": -0.6, "disaster_freq": 12,
-        "flood_zone_pct": 6.0, "insurance_index": 95, "foreclosure_rate": 0.6,
-        "cap_rate": 9.0, "price_appreciation_5yr": 42, "rent_growth": 3.0, "vacancy_rate": 9.5,
-    },
-    "WI": {
-        "median_home_price": 270000, "median_income": 67080, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 5.5, "months_inventory": 2.2,
-        "days_on_market": 25, "unemployment": 2.8, "job_growth": 1.2,
-        "gdp_growth": 2.0, "pop_growth": 0.2, "disaster_freq": 10,
-        "flood_zone_pct": 5.5, "insurance_index": 95, "foreclosure_rate": 0.3,
-        "cap_rate": 6.5, "price_appreciation_5yr": 48, "rent_growth": 4.0, "vacancy_rate": 5.0,
-    },
-    "WY": {
-        "median_home_price": 310000, "median_income": 67060, "mortgage_rate": 6.8,
-        "rent_median": 1000, "yoy_price_change": 2.5, "months_inventory": 5.5,
-        "days_on_market": 68, "unemployment": 3.2, "job_growth": 0.8,
-        "gdp_growth": 1.5, "pop_growth": 0.0, "disaster_freq": 6,
-        "flood_zone_pct": 2.0, "insurance_index": 90, "foreclosure_rate": 0.3,
-        "cap_rate": 5.8, "price_appreciation_5yr": 28, "rent_growth": 2.5, "vacancy_rate": 7.5,
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Top 30 Metro Areas - Realistic data
-# ---------------------------------------------------------------------------
-METRO_DATA = {
-    "New York": {
-        "state": "NY", "lat": 40.7128, "lng": -74.0060,
-        "median_home_price": 620000, "median_income": 78100, "mortgage_rate": 6.8,
-        "rent_median": 2400, "yoy_price_change": 5.0, "months_inventory": 3.8,
-        "days_on_market": 52, "unemployment": 4.5, "job_growth": 1.2,
-        "gdp_growth": 2.8, "pop_growth": -0.3, "disaster_freq": 8,
-        "flood_zone_pct": 12.0, "insurance_index": 135, "foreclosure_rate": 0.5,
-        "cap_rate": 4.2, "price_appreciation_5yr": 30, "rent_growth": 4.5, "vacancy_rate": 4.8,
-    },
-    "Los Angeles": {
-        "state": "CA", "lat": 34.0522, "lng": -118.2437,
-        "median_home_price": 920000, "median_income": 76500, "mortgage_rate": 6.8,
-        "rent_median": 2500, "yoy_price_change": 5.5, "months_inventory": 2.8,
-        "days_on_market": 35, "unemployment": 5.2, "job_growth": 1.0,
-        "gdp_growth": 3.0, "pop_growth": -0.3, "disaster_freq": 15,
-        "flood_zone_pct": 3.5, "insurance_index": 155, "foreclosure_rate": 0.3,
-        "cap_rate": 3.8, "price_appreciation_5yr": 35, "rent_growth": 5.0, "vacancy_rate": 4.0,
-    },
-    "Chicago": {
-        "state": "IL", "lat": 41.8781, "lng": -87.6298,
-        "median_home_price": 315000, "median_income": 72000, "mortgage_rate": 6.8,
-        "rent_median": 1550, "yoy_price_change": 5.5, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 4.8, "job_growth": 0.8,
-        "gdp_growth": 2.0, "pop_growth": -0.5, "disaster_freq": 10,
-        "flood_zone_pct": 6.0, "insurance_index": 110, "foreclosure_rate": 0.6,
-        "cap_rate": 6.5, "price_appreciation_5yr": 32, "rent_growth": 3.5, "vacancy_rate": 6.0,
-    },
-    "Houston": {
-        "state": "TX", "lat": 29.7604, "lng": -95.3698,
-        "median_home_price": 310000, "median_income": 68500, "mortgage_rate": 6.8,
-        "rent_median": 1350, "yoy_price_change": 1.8, "months_inventory": 4.5,
-        "days_on_market": 48, "unemployment": 4.0, "job_growth": 3.0,
-        "gdp_growth": 3.8, "pop_growth": 1.8, "disaster_freq": 22,
-        "flood_zone_pct": 18.0, "insurance_index": 165, "foreclosure_rate": 0.4,
-        "cap_rate": 6.2, "price_appreciation_5yr": 32, "rent_growth": 2.5, "vacancy_rate": 7.5,
-    },
-    "Phoenix": {
-        "state": "AZ", "lat": 33.4484, "lng": -112.0740,
-        "median_home_price": 420000, "median_income": 70200, "mortgage_rate": 6.8,
-        "rent_median": 1550, "yoy_price_change": 3.2, "months_inventory": 4.2,
-        "days_on_market": 42, "unemployment": 3.5, "job_growth": 3.0,
-        "gdp_growth": 3.8, "pop_growth": 2.0, "disaster_freq": 6,
-        "flood_zone_pct": 2.5, "insurance_index": 90, "foreclosure_rate": 0.4,
-        "cap_rate": 5.5, "price_appreciation_5yr": 55, "rent_growth": 3.5, "vacancy_rate": 5.5,
-    },
-    "Philadelphia": {
-        "state": "PA", "lat": 39.9526, "lng": -75.1652,
-        "median_home_price": 310000, "median_income": 68000, "mortgage_rate": 6.8,
-        "rent_median": 1400, "yoy_price_change": 6.0, "months_inventory": 2.2,
-        "days_on_market": 25, "unemployment": 4.2, "job_growth": 0.8,
-        "gdp_growth": 2.0, "pop_growth": -0.2, "disaster_freq": 8,
-        "flood_zone_pct": 6.5, "insurance_index": 100, "foreclosure_rate": 0.5,
-        "cap_rate": 6.5, "price_appreciation_5yr": 42, "rent_growth": 4.0, "vacancy_rate": 5.5,
-    },
-    "San Antonio": {
-        "state": "TX", "lat": 29.4241, "lng": -98.4936,
-        "median_home_price": 275000, "median_income": 60500, "mortgage_rate": 6.8,
-        "rent_median": 1250, "yoy_price_change": 1.5, "months_inventory": 5.0,
-        "days_on_market": 55, "unemployment": 3.5, "job_growth": 2.2,
-        "gdp_growth": 2.8, "pop_growth": 1.5, "disaster_freq": 12,
-        "flood_zone_pct": 6.0, "insurance_index": 120, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 35, "rent_growth": 2.5, "vacancy_rate": 7.0,
-    },
-    "San Diego": {
-        "state": "CA", "lat": 32.7157, "lng": -117.1611,
-        "median_home_price": 850000, "median_income": 83500, "mortgage_rate": 6.8,
-        "rent_median": 2300, "yoy_price_change": 5.0, "months_inventory": 2.5,
-        "days_on_market": 28, "unemployment": 3.8, "job_growth": 1.5,
-        "gdp_growth": 3.2, "pop_growth": 0.2, "disaster_freq": 8,
-        "flood_zone_pct": 3.0, "insurance_index": 120, "foreclosure_rate": 0.2,
-        "cap_rate": 3.8, "price_appreciation_5yr": 42, "rent_growth": 5.0, "vacancy_rate": 3.5,
-    },
-    "Dallas": {
-        "state": "TX", "lat": 32.7767, "lng": -96.7970,
-        "median_home_price": 370000, "median_income": 72000, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 2.0, "months_inventory": 4.0,
-        "days_on_market": 42, "unemployment": 3.5, "job_growth": 3.2,
-        "gdp_growth": 4.0, "pop_growth": 1.8, "disaster_freq": 14,
-        "flood_zone_pct": 5.0, "insurance_index": 130, "foreclosure_rate": 0.3,
-        "cap_rate": 5.5, "price_appreciation_5yr": 38, "rent_growth": 2.5, "vacancy_rate": 6.5,
-    },
-    "San Jose": {
-        "state": "CA", "lat": 37.3382, "lng": -121.8863,
-        "median_home_price": 1350000, "median_income": 128500, "mortgage_rate": 6.8,
-        "rent_median": 3000, "yoy_price_change": 6.0, "months_inventory": 2.0,
-        "days_on_market": 22, "unemployment": 3.5, "job_growth": 2.0,
-        "gdp_growth": 4.5, "pop_growth": 0.3, "disaster_freq": 10,
-        "flood_zone_pct": 3.0, "insurance_index": 130, "foreclosure_rate": 0.2,
-        "cap_rate": 3.5, "price_appreciation_5yr": 35, "rent_growth": 5.5, "vacancy_rate": 3.0,
-    },
-    "Austin": {
-        "state": "TX", "lat": 30.2672, "lng": -97.7431,
-        "median_home_price": 440000, "median_income": 80000, "mortgage_rate": 6.8,
-        "rent_median": 1600, "yoy_price_change": 0.5, "months_inventory": 5.5,
-        "days_on_market": 58, "unemployment": 3.2, "job_growth": 3.5,
-        "gdp_growth": 4.5, "pop_growth": 2.5, "disaster_freq": 10,
-        "flood_zone_pct": 5.0, "insurance_index": 115, "foreclosure_rate": 0.3,
-        "cap_rate": 4.8, "price_appreciation_5yr": 42, "rent_growth": 1.5, "vacancy_rate": 7.5,
-    },
-    "Jacksonville": {
-        "state": "FL", "lat": 30.3322, "lng": -81.6557,
-        "median_home_price": 340000, "median_income": 62000, "mortgage_rate": 6.8,
-        "rent_median": 1400, "yoy_price_change": 3.5, "months_inventory": 4.2,
-        "days_on_market": 45, "unemployment": 3.0, "job_growth": 2.8,
-        "gdp_growth": 3.2, "pop_growth": 1.8, "disaster_freq": 18,
-        "flood_zone_pct": 12.0, "insurance_index": 170, "foreclosure_rate": 0.4,
-        "cap_rate": 5.8, "price_appreciation_5yr": 55, "rent_growth": 4.0, "vacancy_rate": 6.0,
-    },
-    "Fort Worth": {
-        "state": "TX", "lat": 32.7555, "lng": -97.3308,
-        "median_home_price": 330000, "median_income": 68000, "mortgage_rate": 6.8,
-        "rent_median": 1400, "yoy_price_change": 1.8, "months_inventory": 4.2,
-        "days_on_market": 45, "unemployment": 3.2, "job_growth": 3.0,
-        "gdp_growth": 3.8, "pop_growth": 2.0, "disaster_freq": 14,
-        "flood_zone_pct": 5.0, "insurance_index": 125, "foreclosure_rate": 0.3,
-        "cap_rate": 5.8, "price_appreciation_5yr": 38, "rent_growth": 2.5, "vacancy_rate": 6.2,
-    },
-    "Columbus": {
-        "state": "OH", "lat": 39.9612, "lng": -82.9988,
-        "median_home_price": 275000, "median_income": 62500, "mortgage_rate": 6.8,
-        "rent_median": 1200, "yoy_price_change": 6.0, "months_inventory": 2.2,
-        "days_on_market": 22, "unemployment": 3.2, "job_growth": 2.0,
-        "gdp_growth": 2.8, "pop_growth": 0.8, "disaster_freq": 8,
-        "flood_zone_pct": 4.5, "insurance_index": 90, "foreclosure_rate": 0.4,
-        "cap_rate": 6.5, "price_appreciation_5yr": 52, "rent_growth": 4.5, "vacancy_rate": 5.0,
-    },
-    "Charlotte": {
-        "state": "NC", "lat": 35.2271, "lng": -80.8431,
-        "median_home_price": 380000, "median_income": 68500, "mortgage_rate": 6.8,
-        "rent_median": 1450, "yoy_price_change": 5.5, "months_inventory": 2.8,
-        "days_on_market": 28, "unemployment": 3.0, "job_growth": 3.0,
-        "gdp_growth": 3.5, "pop_growth": 1.8, "disaster_freq": 8,
-        "flood_zone_pct": 5.0, "insurance_index": 100, "foreclosure_rate": 0.3,
-        "cap_rate": 5.5, "price_appreciation_5yr": 55, "rent_growth": 4.5, "vacancy_rate": 4.8,
-    },
-    "Indianapolis": {
-        "state": "IN", "lat": 39.7684, "lng": -86.1581,
-        "median_home_price": 260000, "median_income": 58000, "mortgage_rate": 6.8,
-        "rent_median": 1150, "yoy_price_change": 6.0, "months_inventory": 2.5,
-        "days_on_market": 25, "unemployment": 3.2, "job_growth": 1.8,
-        "gdp_growth": 2.5, "pop_growth": 0.5, "disaster_freq": 10,
-        "flood_zone_pct": 6.0, "insurance_index": 95, "foreclosure_rate": 0.5,
-        "cap_rate": 7.0, "price_appreciation_5yr": 52, "rent_growth": 4.5, "vacancy_rate": 5.5,
-    },
-    "San Francisco": {
-        "state": "CA", "lat": 37.7749, "lng": -122.4194,
-        "median_home_price": 1250000, "median_income": 121500, "mortgage_rate": 6.8,
-        "rent_median": 3200, "yoy_price_change": 3.5, "months_inventory": 3.0,
-        "days_on_market": 28, "unemployment": 3.8, "job_growth": 1.5,
-        "gdp_growth": 4.0, "pop_growth": -0.5, "disaster_freq": 12,
-        "flood_zone_pct": 5.0, "insurance_index": 140, "foreclosure_rate": 0.2,
-        "cap_rate": 3.5, "price_appreciation_5yr": 25, "rent_growth": 4.0, "vacancy_rate": 5.0,
-    },
-    "Seattle": {
-        "state": "WA", "lat": 47.6062, "lng": -122.3321,
-        "median_home_price": 780000, "median_income": 105000, "mortgage_rate": 6.8,
-        "rent_median": 2200, "yoy_price_change": 4.0, "months_inventory": 2.5,
-        "days_on_market": 22, "unemployment": 3.5, "job_growth": 2.5,
-        "gdp_growth": 4.0, "pop_growth": 0.5, "disaster_freq": 6,
-        "flood_zone_pct": 3.5, "insurance_index": 95, "foreclosure_rate": 0.2,
-        "cap_rate": 4.0, "price_appreciation_5yr": 35, "rent_growth": 4.5, "vacancy_rate": 4.0,
-    },
-    "Denver": {
-        "state": "CO", "lat": 39.7392, "lng": -104.9903,
-        "median_home_price": 560000, "median_income": 82000, "mortgage_rate": 6.8,
-        "rent_median": 1800, "yoy_price_change": 1.8, "months_inventory": 4.5,
-        "days_on_market": 38, "unemployment": 3.2, "job_growth": 2.5,
-        "gdp_growth": 3.2, "pop_growth": 0.8, "disaster_freq": 8,
-        "flood_zone_pct": 3.0, "insurance_index": 105, "foreclosure_rate": 0.3,
-        "cap_rate": 4.5, "price_appreciation_5yr": 30, "rent_growth": 2.5, "vacancy_rate": 5.5,
-    },
-    "Nashville": {
-        "state": "TN", "lat": 36.1627, "lng": -86.7816,
-        "median_home_price": 420000, "median_income": 68000, "mortgage_rate": 6.8,
-        "rent_median": 1600, "yoy_price_change": 3.5, "months_inventory": 3.5,
-        "days_on_market": 35, "unemployment": 2.8, "job_growth": 2.8,
-        "gdp_growth": 3.5, "pop_growth": 1.2, "disaster_freq": 10,
-        "flood_zone_pct": 5.5, "insurance_index": 105, "foreclosure_rate": 0.3,
-        "cap_rate": 5.2, "price_appreciation_5yr": 52, "rent_growth": 3.5, "vacancy_rate": 5.0,
-    },
-    "Oklahoma City": {
-        "state": "OK", "lat": 35.4676, "lng": -97.5164,
-        "median_home_price": 220000, "median_income": 58500, "mortgage_rate": 6.8,
-        "rent_median": 1000, "yoy_price_change": 3.0, "months_inventory": 3.5,
-        "days_on_market": 38, "unemployment": 3.0, "job_growth": 1.8,
-        "gdp_growth": 2.5, "pop_growth": 0.5, "disaster_freq": 20,
-        "flood_zone_pct": 5.0, "insurance_index": 140, "foreclosure_rate": 0.5,
-        "cap_rate": 7.0, "price_appreciation_5yr": 35, "rent_growth": 3.0, "vacancy_rate": 7.0,
-    },
-    "El Paso": {
-        "state": "TX", "lat": 31.7619, "lng": -106.4850,
-        "median_home_price": 210000, "median_income": 50000, "mortgage_rate": 6.8,
-        "rent_median": 950, "yoy_price_change": 2.5, "months_inventory": 4.0,
-        "days_on_market": 48, "unemployment": 4.0, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 0.5, "disaster_freq": 4,
-        "flood_zone_pct": 2.0, "insurance_index": 85, "foreclosure_rate": 0.3,
-        "cap_rate": 6.5, "price_appreciation_5yr": 38, "rent_growth": 3.0, "vacancy_rate": 6.5,
-    },
-    "Las Vegas": {
-        "state": "NV", "lat": 36.1699, "lng": -115.1398,
-        "median_home_price": 410000, "median_income": 62500, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 4.5, "months_inventory": 3.8,
-        "days_on_market": 38, "unemployment": 5.5, "job_growth": 2.8,
-        "gdp_growth": 3.5, "pop_growth": 1.5, "disaster_freq": 3,
-        "flood_zone_pct": 1.5, "insurance_index": 80, "foreclosure_rate": 0.5,
-        "cap_rate": 5.5, "price_appreciation_5yr": 48, "rent_growth": 4.5, "vacancy_rate": 6.0,
-    },
-    "Memphis": {
-        "state": "TN", "lat": 35.1495, "lng": -90.0490,
-        "median_home_price": 195000, "median_income": 48000, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 3.0, "months_inventory": 3.8,
-        "days_on_market": 42, "unemployment": 4.5, "job_growth": 1.0,
-        "gdp_growth": 1.5, "pop_growth": -0.2, "disaster_freq": 12,
-        "flood_zone_pct": 10.0, "insurance_index": 115, "foreclosure_rate": 0.6,
-        "cap_rate": 8.5, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 8.0,
-    },
-    "Louisville": {
-        "state": "KY", "lat": 38.2527, "lng": -85.7585,
-        "median_home_price": 245000, "median_income": 58500, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 5.0, "months_inventory": 2.8,
-        "days_on_market": 28, "unemployment": 3.5, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 0.2, "disaster_freq": 10,
-        "flood_zone_pct": 8.0, "insurance_index": 100, "foreclosure_rate": 0.4,
-        "cap_rate": 7.0, "price_appreciation_5yr": 45, "rent_growth": 4.0, "vacancy_rate": 5.8,
-    },
-    "Baltimore": {
-        "state": "MD", "lat": 39.2904, "lng": -76.6122,
-        "median_home_price": 280000, "median_income": 55000, "mortgage_rate": 6.8,
-        "rent_median": 1350, "yoy_price_change": 5.5, "months_inventory": 2.5,
-        "days_on_market": 25, "unemployment": 4.8, "job_growth": 0.8,
-        "gdp_growth": 1.8, "pop_growth": -0.5, "disaster_freq": 8,
-        "flood_zone_pct": 7.0, "insurance_index": 100, "foreclosure_rate": 0.6,
-        "cap_rate": 7.5, "price_appreciation_5yr": 38, "rent_growth": 3.5, "vacancy_rate": 7.0,
-    },
-    "Milwaukee": {
-        "state": "WI", "lat": 43.0389, "lng": -87.9065,
-        "median_home_price": 230000, "median_income": 52000, "mortgage_rate": 6.8,
-        "rent_median": 1050, "yoy_price_change": 7.0, "months_inventory": 2.0,
-        "days_on_market": 22, "unemployment": 3.5, "job_growth": 1.0,
-        "gdp_growth": 1.8, "pop_growth": -0.2, "disaster_freq": 6,
-        "flood_zone_pct": 5.0, "insurance_index": 95, "foreclosure_rate": 0.5,
-        "cap_rate": 7.5, "price_appreciation_5yr": 52, "rent_growth": 5.0, "vacancy_rate": 5.5,
-    },
-    "Albuquerque": {
-        "state": "NM", "lat": 35.0844, "lng": -106.6504,
-        "median_home_price": 310000, "median_income": 55000, "mortgage_rate": 6.8,
-        "rent_median": 1150, "yoy_price_change": 3.5, "months_inventory": 4.0,
-        "days_on_market": 45, "unemployment": 4.2, "job_growth": 1.5,
-        "gdp_growth": 2.0, "pop_growth": 0.3, "disaster_freq": 5,
-        "flood_zone_pct": 2.0, "insurance_index": 85, "foreclosure_rate": 0.4,
-        "cap_rate": 6.0, "price_appreciation_5yr": 42, "rent_growth": 3.5, "vacancy_rate": 6.5,
-    },
-    "Tucson": {
-        "state": "AZ", "lat": 32.2226, "lng": -110.9747,
-        "median_home_price": 320000, "median_income": 52000, "mortgage_rate": 6.8,
-        "rent_median": 1200, "yoy_price_change": 3.0, "months_inventory": 4.5,
-        "days_on_market": 48, "unemployment": 3.8, "job_growth": 2.0,
-        "gdp_growth": 2.5, "pop_growth": 0.8, "disaster_freq": 5,
-        "flood_zone_pct": 2.5, "insurance_index": 85, "foreclosure_rate": 0.3,
-        "cap_rate": 6.0, "price_appreciation_5yr": 52, "rent_growth": 3.5, "vacancy_rate": 6.0,
-    },
-    "Raleigh": {
-        "state": "NC", "lat": 35.7796, "lng": -78.6382,
-        "median_home_price": 410000, "median_income": 78000, "mortgage_rate": 6.8,
-        "rent_median": 1500, "yoy_price_change": 4.5, "months_inventory": 2.8,
-        "days_on_market": 25, "unemployment": 2.8, "job_growth": 3.2,
-        "gdp_growth": 3.8, "pop_growth": 2.0, "disaster_freq": 6,
-        "flood_zone_pct": 4.0, "insurance_index": 95, "foreclosure_rate": 0.2,
-        "cap_rate": 5.2, "price_appreciation_5yr": 48, "rent_growth": 4.0, "vacancy_rate": 4.5,
-    },
+# Metro area definitions with coordinates and parent state
+METRO_AREAS = {
+    "New York, NY": {"state": "NY", "lat": 40.7128, "lng": -74.0060, "redfin_name": "New York"},
+    "Los Angeles, CA": {"state": "CA", "lat": 34.0522, "lng": -118.2437, "redfin_name": "Los Angeles"},
+    "Chicago, IL": {"state": "IL", "lat": 41.8781, "lng": -87.6298, "redfin_name": "Chicago"},
+    "Houston, TX": {"state": "TX", "lat": 29.7604, "lng": -95.3698, "redfin_name": "Houston"},
+    "Phoenix, AZ": {"state": "AZ", "lat": 33.4484, "lng": -112.0740, "redfin_name": "Phoenix"},
+    "Philadelphia, PA": {"state": "PA", "lat": 39.9526, "lng": -75.1652, "redfin_name": "Philadelphia"},
+    "San Antonio, TX": {"state": "TX", "lat": 29.4241, "lng": -98.4936, "redfin_name": "San Antonio"},
+    "San Diego, CA": {"state": "CA", "lat": 32.7157, "lng": -117.1611, "redfin_name": "San Diego"},
+    "Dallas, TX": {"state": "TX", "lat": 32.7767, "lng": -96.7970, "redfin_name": "Dallas"},
+    "Austin, TX": {"state": "TX", "lat": 30.2672, "lng": -97.7431, "redfin_name": "Austin"},
+    "Jacksonville, FL": {"state": "FL", "lat": 30.3322, "lng": -81.6557, "redfin_name": "Jacksonville"},
+    "San Francisco, CA": {"state": "CA", "lat": 37.7749, "lng": -122.4194, "redfin_name": "San Francisco"},
+    "Columbus, OH": {"state": "OH", "lat": 39.9612, "lng": -82.9988, "redfin_name": "Columbus"},
+    "Charlotte, NC": {"state": "NC", "lat": 35.2271, "lng": -80.8431, "redfin_name": "Charlotte"},
+    "Indianapolis, IN": {"state": "IN", "lat": 39.7684, "lng": -86.1581, "redfin_name": "Indianapolis"},
+    "Seattle, WA": {"state": "WA", "lat": 47.6062, "lng": -122.3321, "redfin_name": "Seattle"},
+    "Denver, CO": {"state": "CO", "lat": 39.7392, "lng": -104.9903, "redfin_name": "Denver"},
+    "Nashville, TN": {"state": "TN", "lat": 36.1627, "lng": -86.7816, "redfin_name": "Nashville"},
+    "Atlanta, GA": {"state": "GA", "lat": 33.7490, "lng": -84.3880, "redfin_name": "Atlanta"},
+    "Portland, OR": {"state": "OR", "lat": 45.5152, "lng": -122.6784, "redfin_name": "Portland"},
+    "Las Vegas, NV": {"state": "NV", "lat": 36.1699, "lng": -115.1398, "redfin_name": "Las Vegas"},
+    "Miami, FL": {"state": "FL", "lat": 25.7617, "lng": -80.1918, "redfin_name": "Miami"},
+    "Tampa, FL": {"state": "FL", "lat": 27.9506, "lng": -82.4572, "redfin_name": "Tampa"},
+    "Raleigh, NC": {"state": "NC", "lat": 35.7796, "lng": -78.6382, "redfin_name": "Raleigh"},
+    "Minneapolis, MN": {"state": "MN", "lat": 44.9778, "lng": -93.2650, "redfin_name": "Minneapolis"},
+    "Salt Lake City, UT": {"state": "UT", "lat": 40.7608, "lng": -111.8910, "redfin_name": "Salt Lake City"},
+    "Detroit, MI": {"state": "MI", "lat": 42.3314, "lng": -83.0458, "redfin_name": "Detroit"},
+    "Boston, MA": {"state": "MA", "lat": 42.3601, "lng": -71.0589, "redfin_name": "Boston"},
+    "Pittsburgh, PA": {"state": "PA", "lat": 40.4406, "lng": -79.9959, "redfin_name": "Pittsburgh"},
+    "Baltimore, MD": {"state": "MD", "lat": 39.2904, "lng": -76.6122, "redfin_name": "Baltimore"},
 }
 
 
-# ---------------------------------------------------------------------------
-# Scoring functions
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Data Fetch Functions (all real API calls, cached 24 hours)
+# ===========================================================================
 
-def _clamp(value, lo=0, hi=200):
-    """Clamp a value to [lo, hi]."""
-    return max(lo, min(hi, int(round(value))))
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_census_data():
+    """Fetch median income, home value, rent, and population from Census ACS.
+
+    Returns dict keyed by state abbreviation with census metrics.
+    Fetches both 2023 and 2021 data for population change calculation.
+    """
+    result = {}
+
+    # Fetch 2023 data (latest ACS 1-year)
+    url_2023 = (
+        "https://api.census.gov/data/2023/acs/acs1"
+        "?get=NAME,B19013_001E,B25077_001E,B25064_001E,B01003_001E"
+        "&for=state:*"
+    )
+    # Fetch 2021 data for population change
+    url_2021 = (
+        "https://api.census.gov/data/2021/acs/acs1"
+        "?get=NAME,B01003_001E"
+        "&for=state:*"
+    )
+
+    try:
+        resp_2023 = requests.get(url_2023, timeout=30)
+        resp_2023.raise_for_status()
+        data_2023 = resp_2023.json()
+    except Exception as e:
+        print(f"[REALESTATE-1000] Census 2023 API failed: {e}")
+        return result
+
+    # Parse 2021 population for YoY comparison
+    pop_2021 = {}
+    try:
+        resp_2021 = requests.get(url_2021, timeout=30)
+        resp_2021.raise_for_status()
+        data_2021 = resp_2021.json()
+        for row in data_2021[1:]:
+            fips = row[-1]  # state FIPS
+            if fips in _FIPS_TO_ABBR:
+                try:
+                    pop_2021[_FIPS_TO_ABBR[fips]] = int(row[1])
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        print(f"[REALESTATE-1000] Census 2021 API failed: {e}")
+
+    # Parse 2023 data
+    # Header: NAME, B19013_001E, B25077_001E, B25064_001E, B01003_001E, state
+    for row in data_2023[1:]:
+        fips = row[-1]  # state FIPS code
+        if fips not in _FIPS_TO_ABBR:
+            continue
+        abbr = _FIPS_TO_ABBR[fips]
+
+        try:
+            median_income = int(row[1]) if row[1] else None
+            median_home_value = int(row[2]) if row[2] else None
+            median_rent = int(row[3]) if row[3] else None
+            population = int(row[4]) if row[4] else None
+        except (ValueError, TypeError):
+            continue
+
+        pop_change = None
+        if population and abbr in pop_2021 and pop_2021[abbr] > 0:
+            pop_change = round(
+                (population - pop_2021[abbr]) / pop_2021[abbr] * 100, 2
+            )
+
+        result[abbr] = {
+            "median_income": median_income,
+            "median_home_value": median_home_value,
+            "median_rent": median_rent,
+            "population": population,
+            "pop_growth": pop_change,
+        }
+
+    return result
 
 
-def _score_affordability(d):
-    """Score affordability (0-200). More affordable = higher score."""
-    score_parts = []
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_bls_unemployment():
+    """Fetch state unemployment rates from BLS API.
 
-    # Price-to-income ratio (ideal: 2.5-3.5, bad: >8)
-    pti = d["median_home_price"] / max(d["median_income"], 1)
-    if pti <= 2.5:
-        s = 200
-    elif pti >= 10:
-        s = 10
+    Returns dict keyed by state abbreviation with unemployment rate.
+    BLS limits to 25 series per request, so we use 3 batches.
+    """
+    result = {}
+    all_fips = list(STATE_FIPS.keys())
+
+    # Build series IDs: LASST{FIPS}0000000000003
+    series_map = {}
+    for fips in all_fips:
+        series_id = f"LASST{fips}0000000000003"
+        series_map[series_id] = _FIPS_TO_ABBR[fips]
+
+    series_list = list(series_map.keys())
+
+    # Split into batches of 25
+    batches = []
+    for i in range(0, len(series_list), 25):
+        batches.append(series_list[i:i + 25])
+
+    url = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
+
+    for batch in batches:
+        payload = {
+            "seriesid": batch,
+            "startyear": "2024",
+            "endyear": "2026",
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("status") != "REQUEST_SUCCEEDED":
+                print(f"[REALESTATE-1000] BLS batch warning: {data.get('message', '')}")
+
+            for series in data.get("Results", {}).get("series", []):
+                series_id = series["seriesID"]
+                abbr = series_map.get(series_id)
+                if not abbr:
+                    continue
+
+                # Get the latest data point
+                series_data = series.get("data", [])
+                if series_data:
+                    # Data is sorted latest first
+                    latest = series_data[0]
+                    try:
+                        result[abbr] = float(latest["value"])
+                    except (ValueError, KeyError):
+                        pass
+
+        except Exception as e:
+            print(f"[REALESTATE-1000] BLS batch failed: {e}")
+
+        # Small delay between batches to be polite
+        time.sleep(1)
+
+    return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_redfin_data():
+    """Fetch Redfin state-level market data from public S3 bucket.
+
+    Returns dict keyed by state abbreviation with market metrics.
+    Includes: median_sale_price, yoy_price_change, months_of_supply,
+              days_on_market, sale_to_list_ratio, homes_sold, price_drops,
+              inventory, price_5yr_ago.
+    """
+    result = {}
+    url = "https://redfin-public-data.s3.us-west-2.amazonaws.com/redfin_market_tracker/state_market_tracker.tsv000.gz"
+
+    try:
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+
+        # Decompress gzip
+        buf = io.BytesIO(resp.content)
+        with gzip.open(buf, "rt") as f:
+            df = pd.read_csv(f, sep="\t", low_memory=False)
+
+    except Exception as e:
+        print(f"[REALESTATE-1000] Redfin download failed: {e}")
+        return result
+
+    # Filter for All Residential property type
+    if "property_type" in df.columns:
+        df = df[df["property_type"] == "All Residential"].copy()
+
+    # Ensure period_begin is datetime
+    if "period_begin" in df.columns:
+        df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
+
+    # Get the latest period
+    latest_period = df["period_begin"].max()
+    df_latest = df[df["period_begin"] == latest_period].copy()
+
+    # Also get data from ~5 years ago for appreciation calculation
+    target_5yr = latest_period - pd.DateOffset(years=5)
+    # Find closest period to 5yr ago
+    all_periods = df["period_begin"].dropna().unique()
+    if len(all_periods) > 0:
+        diffs = [abs((pd.Timestamp(p) - target_5yr).days) for p in all_periods]
+        closest_5yr_period = all_periods[np.argmin(diffs)]
+        df_5yr = df[df["period_begin"] == closest_5yr_period].copy()
     else:
-        s = 200 - (pti - 2.5) * (190 / 7.5)
-    score_parts.append(s)
+        df_5yr = pd.DataFrame()
 
-    # Monthly mortgage payment as % of income
-    # Monthly payment formula: P * r(1+r)^n / ((1+r)^n - 1)
-    monthly_rate = d["mortgage_rate"] / 100 / 12
-    n = 360  # 30 years
-    principal = d["median_home_price"] * 0.8  # 20% down
-    if monthly_rate > 0:
-        payment = principal * monthly_rate * (1 + monthly_rate)**n / ((1 + monthly_rate)**n - 1)
+    # Build 5yr price lookup by state
+    price_5yr_ago = {}
+    if not df_5yr.empty and "state" in df_5yr.columns:
+        for _, row in df_5yr.iterrows():
+            state_name = str(row.get("state", "")).strip()
+            try:
+                price_5yr_ago[state_name] = float(row["median_sale_price"])
+            except (ValueError, TypeError, KeyError):
+                pass
+
+    # Parse latest data
+    for _, row in df_latest.iterrows():
+        state_name = str(row.get("state", "")).strip()
+        abbr = _NAME_TO_ABBR.get(state_name)
+        if not abbr:
+            # Try case-insensitive match
+            for n, a in _NAME_TO_ABBR.items():
+                if n.lower() == state_name.lower():
+                    abbr = a
+                    break
+        if not abbr:
+            continue
+
+        def safe_float(val):
+            try:
+                v = float(val)
+                return v if not np.isnan(v) else None
+            except (ValueError, TypeError):
+                return None
+
+        median_sale_price = safe_float(row.get("median_sale_price"))
+        yoy_price = safe_float(row.get("median_sale_price_yoy"))
+        if yoy_price is not None:
+            yoy_price = round(yoy_price * 100, 2)  # Convert to percentage
+
+        months_supply = safe_float(row.get("months_of_supply"))
+        dom = safe_float(row.get("median_dom"))
+        sale_to_list = safe_float(row.get("avg_sale_to_list"))
+        homes_sold = safe_float(row.get("homes_sold"))
+        price_drops_pct = safe_float(row.get("price_drops"))
+        if price_drops_pct is not None:
+            price_drops_pct = round(price_drops_pct * 100, 2)
+        inventory = safe_float(row.get("inventory"))
+
+        # 5yr appreciation
+        appreciation_5yr = None
+        old_price = price_5yr_ago.get(state_name)
+        if median_sale_price and old_price and old_price > 0:
+            appreciation_5yr = round(
+                (median_sale_price - old_price) / old_price * 100, 1
+            )
+
+        result[abbr] = {
+            "median_sale_price": median_sale_price,
+            "yoy_price_change": yoy_price,
+            "months_of_supply": months_supply,
+            "days_on_market": dom,
+            "sale_to_list_ratio": sale_to_list,
+            "homes_sold": homes_sold,
+            "price_drops_pct": price_drops_pct,
+            "inventory": inventory,
+            "price_appreciation_5yr": appreciation_5yr,
+        }
+
+    return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_fema_disasters():
+    """Fetch FEMA disaster counts per state (last 5 years, excluding Biological).
+
+    Returns dict keyed by state abbreviation with disaster count.
+    """
+    result = {}
+    url = (
+        "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries"
+        "?$filter=declarationDate gt '2021-01-01T00:00:00.000Z' and incidentType ne 'Biological'"
+        "&$select=state,incidentType,disasterNumber"
+        "&$top=10000"
+    )
+
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        records = data.get("DisasterDeclarationsSummaries", [])
+
+        # Count unique disaster numbers per state
+        state_disasters = {}
+        for rec in records:
+            st_abbr = rec.get("state", "")
+            disaster_num = rec.get("disasterNumber")
+            if st_abbr and disaster_num is not None:
+                if st_abbr not in state_disasters:
+                    state_disasters[st_abbr] = set()
+                state_disasters[st_abbr].add(disaster_num)
+
+        for abbr, disasters in state_disasters.items():
+            result[abbr] = len(disasters)
+
+    except Exception as e:
+        print(f"[REALESTATE-1000] FEMA API failed: {e}")
+
+    return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_mortgage_rate():
+    """Fetch current 30-year fixed mortgage rate from Freddie Mac.
+
+    Returns float (e.g. 6.85) or None.
+    """
+    url = "https://www.freddiemac.com/pmms/docs/PMMS_history.csv"
+
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+
+        df = pd.read_csv(io.StringIO(resp.text))
+
+        # The CSV has columns like: Date, 30yr FRM, ...
+        # Find the 30-year column
+        col_30yr = None
+        for col in df.columns:
+            if "30" in str(col).lower():
+                col_30yr = col
+                break
+
+        if col_30yr is None:
+            # Fallback: use second column
+            col_30yr = df.columns[1] if len(df.columns) > 1 else None
+
+        if col_30yr:
+            # Get last valid value
+            values = pd.to_numeric(df[col_30yr], errors="coerce").dropna()
+            if len(values) > 0:
+                rate = float(values.iloc[-1])
+                if 2.0 < rate < 15.0:  # sanity check
+                    return round(rate, 2)
+
+    except Exception as e:
+        print(f"[REALESTATE-1000] Freddie Mac API failed: {e}")
+
+    return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_bea_gdp():
+    """Fetch state GDP data from BEA API. Requires BEA_API_KEY in secrets.
+
+    Returns dict keyed by state abbreviation with gdp_growth (%).
+    Returns empty dict if API key not available.
+    """
+    result = {}
+
+    # Try to get API key
+    bea_key = None
+    try:
+        bea_key = st.secrets.get("BEA_API_KEY")
+    except Exception:
+        pass
+    if not bea_key:
+        bea_key = os.environ.get("BEA_API_KEY")
+    if not bea_key:
+        return result
+
+    url = (
+        f"https://apps.bea.gov/api/data/"
+        f"?&UserID={bea_key}"
+        f"&method=GetData&DataSetName=Regional"
+        f"&TableName=SQGDP1&LineCode=1&GeoFips=STATE"
+        f"&Year=LAST5&ResultFormat=json"
+    )
+
+    # BEA state FIPS names don't use abbreviations; we need a mapping
+    # BEA uses GeoName like "Alabama", "Alaska", etc.
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        bea_data = data.get("BEAAPI", {}).get("Results", {}).get("Data", [])
+        if not bea_data:
+            return result
+
+        # Group by state, sort by year to get growth
+        state_gdp = {}
+        for rec in bea_data:
+            geo_name = rec.get("GeoName", "")
+            year = rec.get("TimePeriod", "")
+            val = rec.get("DataValue", "")
+
+            abbr = _NAME_TO_ABBR.get(geo_name)
+            if not abbr:
+                continue
+
+            try:
+                gdp_val = float(str(val).replace(",", ""))
+            except (ValueError, TypeError):
+                continue
+
+            if abbr not in state_gdp:
+                state_gdp[abbr] = {}
+            state_gdp[abbr][year] = gdp_val
+
+        # Calculate growth from latest 2 years
+        for abbr, yearly in state_gdp.items():
+            years = sorted(yearly.keys())
+            if len(years) >= 2:
+                latest = yearly[years[-1]]
+                prev = yearly[years[-2]]
+                if prev > 0:
+                    growth = round((latest - prev) / prev * 100, 2)
+                    result[abbr] = growth
+
+    except Exception as e:
+        print(f"[REALESTATE-1000] BEA API failed: {e}")
+
+    return result
+
+
+# ===========================================================================
+# Data Merging
+# ===========================================================================
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_all_data():
+    """Fetch all data sources and merge into a unified state-level dataset.
+
+    Returns dict keyed by state abbreviation, each containing all available
+    metrics for scoring and display.
+    """
+    census = fetch_census_data()
+    unemployment = fetch_bls_unemployment()
+    redfin = fetch_redfin_data()
+    fema = fetch_fema_disasters()
+    mortgage = fetch_mortgage_rate()
+    bea = fetch_bea_gdp()
+
+    # Default mortgage rate if fetch failed
+    if mortgage is None:
+        mortgage = 6.5  # reasonable fallback
+
+    merged = {}
+    for fips, info in STATE_FIPS.items():
+        abbr = info["abbr"]
+        name = info["name"]
+
+        d = {"abbr": abbr, "name": name, "fips": fips}
+
+        # Census data
+        c = census.get(abbr, {})
+        d["median_income"] = c.get("median_income")
+        d["median_home_value"] = c.get("median_home_value")
+        d["median_rent"] = c.get("median_rent")
+        d["population"] = c.get("population")
+        d["pop_growth"] = c.get("pop_growth")
+
+        # BLS unemployment
+        d["unemployment"] = unemployment.get(abbr)
+
+        # Redfin market data
+        r = redfin.get(abbr, {})
+        d["median_sale_price"] = r.get("median_sale_price")
+        d["yoy_price_change"] = r.get("yoy_price_change")
+        d["months_of_supply"] = r.get("months_of_supply")
+        d["days_on_market"] = r.get("days_on_market")
+        d["sale_to_list_ratio"] = r.get("sale_to_list_ratio")
+        d["homes_sold"] = r.get("homes_sold")
+        d["price_drops_pct"] = r.get("price_drops_pct")
+        d["inventory"] = r.get("inventory")
+        d["price_appreciation_5yr"] = r.get("price_appreciation_5yr")
+
+        # Use Redfin sale price as primary, Census home value as fallback
+        d["median_home_price"] = d["median_sale_price"] or d["median_home_value"]
+
+        # FEMA disasters
+        d["disaster_freq"] = fema.get(abbr, 0)
+
+        # Mortgage rate (national)
+        d["mortgage_rate"] = mortgage
+
+        # BEA GDP growth (optional)
+        d["gdp_growth"] = bea.get(abbr)
+
+        # Derived metrics
+        # Rental yield (cap rate proxy)
+        if d["median_rent"] and d["median_home_price"] and d["median_home_price"] > 0:
+            d["cap_rate"] = round(
+                (d["median_rent"] * 12) / d["median_home_price"] * 100, 2
+            )
+        else:
+            d["cap_rate"] = None
+
+        # Rent-to-income ratio
+        if d["median_rent"] and d["median_income"] and d["median_income"] > 0:
+            d["rent_to_income"] = round(
+                (d["median_rent"] * 12) / d["median_income"] * 100, 1
+            )
+        else:
+            d["rent_to_income"] = None
+
+        # Price-to-income ratio
+        if d["median_home_price"] and d["median_income"] and d["median_income"] > 0:
+            d["price_to_income"] = round(
+                d["median_home_price"] / d["median_income"], 2
+            )
+        else:
+            d["price_to_income"] = None
+
+        # Mortgage burden: monthly mortgage payment as % of monthly income
+        if d["median_home_price"] and d["median_income"] and d["median_income"] > 0:
+            monthly_rate = mortgage / 100 / 12
+            principal = d["median_home_price"] * 0.8  # 20% down
+            if monthly_rate > 0:
+                n = 360
+                payment = (
+                    principal * monthly_rate * (1 + monthly_rate) ** n
+                    / ((1 + monthly_rate) ** n - 1)
+                )
+            else:
+                payment = principal / 360
+            d["mortgage_burden"] = round(
+                payment / (d["median_income"] / 12) * 100, 1
+            )
+        else:
+            d["mortgage_burden"] = None
+
+        # Display compatibility fields (for app.py detail view)
+        d["rent_median"] = d["median_rent"]
+        d["months_inventory"] = d["months_of_supply"]
+        d["job_growth"] = d["gdp_growth"] if d["gdp_growth"] is not None else 0.0
+        d["flood_zone_pct"] = 0.0  # Not available from free APIs
+        d["insurance_index"] = 100  # Not available from free APIs
+        d["foreclosure_rate"] = 0.0  # Not available from free APIs
+        d["vacancy_rate"] = 0.0  # Not available from free APIs
+        d["rent_growth"] = 0.0  # Not available from free APIs
+
+        merged[abbr] = d
+
+    return merged
+
+
+# ===========================================================================
+# Percentile-based Scoring Helpers
+# ===========================================================================
+
+def _percentile_score(value, all_values, invert=False):
+    """Convert a value to a 0-200 score based on percentile rank among all values.
+
+    Args:
+        value: The value to score.
+        all_values: List of all values (None values excluded).
+        invert: If True, lower values get higher scores.
+
+    Returns:
+        Integer score 0-200, or None if value is None.
+    """
+    if value is None:
+        return None
+
+    valid = [v for v in all_values if v is not None]
+    if len(valid) == 0:
+        return None
+
+    # Count how many values are below this one
+    below = sum(1 for v in valid if v < value)
+    equal = sum(1 for v in valid if v == value)
+    # Percentile rank (0.0 to 1.0)
+    percentile = (below + equal * 0.5) / len(valid)
+
+    if invert:
+        percentile = 1.0 - percentile
+
+    return int(round(percentile * 200))
+
+
+def _clamp(score):
+    """Clamp score to 0-200 range."""
+    if score is None:
+        return None
+    return max(0, min(200, int(round(score))))
+
+
+def _band_score(value, ideal_low, ideal_high, bad_low, bad_high):
+    """Score where a middle range is ideal (e.g. months of supply 4-6).
+
+    Returns 0-200 where ideal range = 200, outside bad range = 0.
+    """
+    if value is None:
+        return None
+
+    if ideal_low <= value <= ideal_high:
+        return 200
+
+    if value < ideal_low:
+        if value <= bad_low:
+            return 0
+        return int(round(200 * (value - bad_low) / (ideal_low - bad_low)))
     else:
-        payment = principal / n
-    pmt_pct = (payment * 12) / max(d["median_income"], 1) * 100
-    if pmt_pct <= 20:
-        s = 200
-    elif pmt_pct >= 60:
-        s = 10
-    else:
-        s = 200 - (pmt_pct - 20) * (190 / 40)
-    score_parts.append(s)
-
-    # Rent-to-income ratio (ideal: <25%, bad: >50%)
-    rti = d["rent_median"] * 12 / max(d["median_income"], 1) * 100
-    if rti <= 20:
-        s = 200
-    elif rti >= 50:
-        s = 10
-    else:
-        s = 200 - (rti - 20) * (190 / 30)
-    score_parts.append(s)
-
-    return _clamp(sum(score_parts) / len(score_parts))
+        if value >= bad_high:
+            return 0
+        return int(round(200 * (bad_high - value) / (bad_high - ideal_high)))
 
 
-def _score_momentum(d):
-    """Score market momentum (0-200). Healthy growth + low inventory = higher."""
-    score_parts = []
+# ===========================================================================
+# Axis Scoring Functions
+# ===========================================================================
 
-    # YoY price change: ideal 3-6%, overheated >10%, declining <0%
-    yoy = d["yoy_price_change"]
-    if 3 <= yoy <= 6:
-        s = 200
-    elif yoy < 0:
-        s = max(10, 80 + yoy * 20)
-    elif yoy < 3:
-        s = 80 + yoy * (120 / 3)
-    else:  # > 6
-        s = max(10, 200 - (yoy - 6) * 30)
-    score_parts.append(s)
+def score_affordability(state_data, all_states):
+    """Score Affordability axis (0-200). More affordable = higher score.
 
-    # Months of inventory: ideal 2-4, too much >8, too little <1
-    inv = d["months_inventory"]
-    if 2 <= inv <= 4:
-        s = 200
-    elif inv < 1:
-        s = 100
-    elif inv < 2:
-        s = 100 + (inv - 1) * 100
-    else:  # > 4
-        s = max(10, 200 - (inv - 4) * 35)
-    score_parts.append(s)
+    Uses: price_to_income, mortgage_burden, rent_to_income.
+    All scored via inverse percentile (lower ratio = more affordable = higher score).
+    """
+    parts = []
 
-    # Days on market: ideal <30, bad >90
-    dom = d["days_on_market"]
-    if dom <= 20:
-        s = 200
-    elif dom >= 90:
-        s = 20
-    else:
-        s = 200 - (dom - 20) * (180 / 70)
-    score_parts.append(s)
+    # Price to income ratio (lower = more affordable)
+    pti = state_data.get("price_to_income")
+    all_pti = [s.get("price_to_income") for s in all_states.values()]
+    s = _percentile_score(pti, all_pti, invert=True)
+    if s is not None:
+        parts.append(s)
 
-    return _clamp(sum(score_parts) / len(score_parts))
+    # Mortgage burden (lower = more affordable)
+    mb = state_data.get("mortgage_burden")
+    all_mb = [s.get("mortgage_burden") for s in all_states.values()]
+    s = _percentile_score(mb, all_mb, invert=True)
+    if s is not None:
+        parts.append(s)
+
+    # Rent to income (lower = more affordable)
+    rti = state_data.get("rent_to_income")
+    all_rti = [s.get("rent_to_income") for s in all_states.values()]
+    s = _percentile_score(rti, all_rti, invert=True)
+    if s is not None:
+        parts.append(s)
+
+    if not parts:
+        return None
+    return _clamp(sum(parts) / len(parts))
 
 
-def _score_economic(d):
-    """Score economic foundation (0-200). Strong economy = higher."""
-    score_parts = []
+def score_momentum(state_data, all_states):
+    """Score Market Momentum axis (0-200). Healthy market = higher score.
 
-    # Unemployment rate: ideal <3%, bad >8%
-    unemp = d["unemployment"]
-    if unemp <= 2.5:
-        s = 200
-    elif unemp >= 8:
-        s = 10
-    else:
-        s = 200 - (unemp - 2.5) * (190 / 5.5)
-    score_parts.append(s)
+    Uses: yoy_price_change (moderate 3-8% ideal), months_of_supply (4-6 ideal),
+          days_on_market (lower better), sale_to_list_ratio (higher better).
+    """
+    parts = []
 
-    # Job growth: ideal >2.5%, bad <-1%
-    jg = d["job_growth"]
-    if jg >= 3:
-        s = 200
-    elif jg <= -1:
-        s = 10
-    else:
-        s = 10 + (jg + 1) * (190 / 4)
-    score_parts.append(s)
+    # YoY price change: moderate growth (3-8%) is best
+    yoy = state_data.get("yoy_price_change")
+    if yoy is not None:
+        s = _band_score(yoy, 3.0, 8.0, -5.0, 20.0)
+        if s is not None:
+            parts.append(s)
 
-    # GDP per capita growth: ideal >3%, bad <0%
-    gdp = d["gdp_growth"]
-    if gdp >= 4:
-        s = 200
-    elif gdp <= 0:
-        s = 10
-    else:
-        s = 10 + gdp * (190 / 4)
-    score_parts.append(s)
+    # Months of supply: 4-6 months is balanced
+    mos = state_data.get("months_of_supply")
+    if mos is not None:
+        s = _band_score(mos, 4.0, 6.0, 0.5, 12.0)
+        if s is not None:
+            parts.append(s)
 
-    # Population growth: ideal >1.5%, bad <-0.5%
-    pg = d["pop_growth"]
-    if pg >= 2:
-        s = 200
-    elif pg <= -0.5:
-        s = 10
-    else:
-        s = 10 + (pg + 0.5) * (190 / 2.5)
-    score_parts.append(s)
+    # Days on market: lower = more demand = better
+    dom = state_data.get("days_on_market")
+    all_dom = [s.get("days_on_market") for s in all_states.values()]
+    s = _percentile_score(dom, all_dom, invert=True)
+    if s is not None:
+        parts.append(s)
 
-    return _clamp(sum(score_parts) / len(score_parts))
+    # Sale to list ratio: higher = stronger market
+    stl = state_data.get("sale_to_list_ratio")
+    all_stl = [s.get("sale_to_list_ratio") for s in all_states.values()]
+    s = _percentile_score(stl, all_stl, invert=False)
+    if s is not None:
+        parts.append(s)
+
+    if not parts:
+        return None
+    return _clamp(sum(parts) / len(parts))
 
 
-def _score_risk(d):
-    """Score risk profile (0-200). LOWER risk = HIGHER score (inverse)."""
-    score_parts = []
+def score_economic(state_data, all_states):
+    """Score Economic Foundation axis (0-200). Stronger economy = higher score.
 
-    # FEMA disaster frequency (5yr): ideal <5, bad >25
-    df = d["disaster_freq"]
-    if df <= 3:
-        s = 200
-    elif df >= 25:
-        s = 10
-    else:
-        s = 200 - (df - 3) * (190 / 22)
-    score_parts.append(s)
+    Uses: unemployment (lower better), pop_growth (higher better),
+          gdp_growth (higher better, optional).
+    """
+    parts = []
 
-    # Flood zone %: ideal <2%, bad >15%
-    fz = d["flood_zone_pct"]
-    if fz <= 1:
-        s = 200
-    elif fz >= 15:
-        s = 10
-    else:
-        s = 200 - (fz - 1) * (190 / 14)
-    score_parts.append(s)
+    # Unemployment rate: lower = better (invert)
+    ue = state_data.get("unemployment")
+    all_ue = [s.get("unemployment") for s in all_states.values()]
+    s = _percentile_score(ue, all_ue, invert=True)
+    if s is not None:
+        parts.append(s)
 
-    # Insurance cost index: ideal <80, bad >180
-    ins = d["insurance_index"]
-    if ins <= 80:
-        s = 200
-    elif ins >= 180:
-        s = 10
-    else:
-        s = 200 - (ins - 80) * (190 / 100)
-    score_parts.append(s)
+    # Population growth: higher = better
+    pg = state_data.get("pop_growth")
+    all_pg = [s.get("pop_growth") for s in all_states.values()]
+    s = _percentile_score(pg, all_pg, invert=False)
+    if s is not None:
+        parts.append(s)
 
-    # Foreclosure rate: ideal <0.2%, bad >1%
-    fc = d["foreclosure_rate"]
-    if fc <= 0.1:
-        s = 200
-    elif fc >= 1.0:
-        s = 10
-    else:
-        s = 200 - (fc - 0.1) * (190 / 0.9)
-    score_parts.append(s)
+    # GDP growth (optional): higher = better
+    gdp = state_data.get("gdp_growth")
+    all_gdp = [s.get("gdp_growth") for s in all_states.values()]
+    if gdp is not None and any(v is not None for v in all_gdp):
+        s = _percentile_score(gdp, all_gdp, invert=False)
+        if s is not None:
+            parts.append(s)
 
-    return _clamp(sum(score_parts) / len(score_parts))
+    if not parts:
+        return None
+    return _clamp(sum(parts) / len(parts))
 
 
-def _score_investment(d):
-    """Score investment return (0-200). Better returns = higher."""
-    score_parts = []
+def score_risk(state_data, all_states):
+    """Score Risk Profile axis (0-200). Lower risk = higher score (INVERSE).
 
-    # Cap rate: ideal >7%, bad <3%
-    cr = d["cap_rate"]
-    if cr >= 8:
-        s = 200
-    elif cr <= 3:
-        s = 10
-    else:
-        s = 10 + (cr - 3) * (190 / 5)
-    score_parts.append(s)
+    Uses: disaster_freq (fewer FEMA disasters = higher score).
+    """
+    parts = []
 
-    # 5-year price appreciation: ideal >50%, bad <10%
-    pa = d["price_appreciation_5yr"]
-    if pa >= 60:
-        s = 200
-    elif pa <= 10:
-        s = 10
-    else:
-        s = 10 + (pa - 10) * (190 / 50)
-    score_parts.append(s)
+    # FEMA disaster count: fewer = lower risk = higher score (invert)
+    df = state_data.get("disaster_freq")
+    all_df = [s.get("disaster_freq") for s in all_states.values()]
+    s = _percentile_score(df, all_df, invert=True)
+    if s is not None:
+        parts.append(s)
 
-    # Rent growth: ideal >5%, bad <0%
-    rg = d["rent_growth"]
-    if rg >= 6:
-        s = 200
-    elif rg <= 0:
-        s = 10
-    else:
-        s = 10 + rg * (190 / 6)
-    score_parts.append(s)
-
-    # Vacancy rate (inverse): ideal <3%, bad >10%
-    vr = d["vacancy_rate"]
-    if vr <= 3:
-        s = 200
-    elif vr >= 10:
-        s = 10
-    else:
-        s = 200 - (vr - 3) * (190 / 7)
-    score_parts.append(s)
-
-    return _clamp(sum(score_parts) / len(score_parts))
+    if not parts:
+        return None
+    return _clamp(sum(parts) / len(parts))
 
 
-def score_market(market_data):
-    """Score a single market (state or metro).
-    Returns dict with axis scores (each 0-200) and total (0-1000).
+def score_investment(state_data, all_states):
+    """Score Investment Return axis (0-200). Higher returns = higher score.
+
+    Uses: cap_rate/rental_yield (higher better), price_appreciation_5yr (higher better).
+    """
+    parts = []
+
+    # Rental yield / cap rate: higher = better
+    cr = state_data.get("cap_rate")
+    all_cr = [s.get("cap_rate") for s in all_states.values()]
+    s = _percentile_score(cr, all_cr, invert=False)
+    if s is not None:
+        parts.append(s)
+
+    # 5-year appreciation: higher = better
+    pa = state_data.get("price_appreciation_5yr")
+    all_pa = [s.get("price_appreciation_5yr") for s in all_states.values()]
+    s = _percentile_score(pa, all_pa, invert=False)
+    if s is not None:
+        parts.append(s)
+
+    if not parts:
+        return None
+    return _clamp(sum(parts) / len(parts))
+
+
+# ===========================================================================
+# Score a single market
+# ===========================================================================
+
+def score_market(state_data, all_states):
+    """Score a single state/market. Returns dict with axis scores and total.
+
     Uses proportional scaling if any axis returns None.
     """
     axes_funcs = [
-        ("Affordability", _score_affordability),
-        ("Market Momentum", _score_momentum),
-        ("Economic Foundation", _score_economic),
-        ("Risk Profile", _score_risk),
-        ("Investment Return", _score_investment),
+        ("Affordability", score_affordability),
+        ("Market Momentum", score_momentum),
+        ("Economic Foundation", score_economic),
+        ("Risk Profile", score_risk),
+        ("Investment Return", score_investment),
     ]
 
     axes = {}
@@ -1050,20 +917,22 @@ def score_market(market_data):
 
     for label, func in axes_funcs:
         try:
-            val = func(market_data)
+            val = func(state_data, all_states)
             axes[label] = val
-            available_count += 1
-            available_sum += val
+            if val is not None:
+                available_count += 1
+                available_sum += val
         except Exception:
             axes[label] = None
 
-    # Proportional scaling for missing data
     if available_count == 0:
         return None
 
+    # Proportional scaling: fill missing axes with the average of available ones
+    avg_available = int(round(available_sum / available_count))
     for label in axes:
         if axes[label] is None:
-            axes[label] = int(round(available_sum / available_count))
+            axes[label] = avg_available
 
     total = sum(axes.values())
 
@@ -1073,56 +942,70 @@ def score_market(market_data):
     }
 
 
-def load_state_data():
-    """Load and score all states. Returns list of dicts."""
+# ===========================================================================
+# Public API: get_state_rankings and get_metro_rankings
+# ===========================================================================
+
+def get_state_rankings():
+    """Return all states sorted by total score (descending).
+
+    Each entry is a dict with: fips, name, abbr, total, axes, data.
+    """
+    all_states = load_all_data()
+
     results = []
-    for fips, info in STATE_FIPS.items():
-        abbr = info["abbr"]
-        if abbr not in STATES_DATA:
-            continue
-        d = STATES_DATA[abbr]
-        scored = score_market(d)
+    for abbr, d in all_states.items():
+        scored = score_market(d, all_states)
         if scored is None:
             continue
         results.append({
-            "fips": fips,
-            "name": info["name"],
+            "fips": d["fips"],
+            "name": d["name"],
             "abbr": abbr,
             "total": scored["total"],
             "axes": scored["axes"],
             "data": d,
         })
+
+    results.sort(key=lambda x: x["total"], reverse=True)
     return results
 
 
-def load_metro_data():
-    """Load and score all metro areas. Returns list of dicts."""
+def get_metro_rankings():
+    """Return metro areas sorted by total score (descending).
+
+    Metro areas inherit their parent state's economic and risk data,
+    but would use metro-specific Redfin data if available. Currently
+    uses the parent state data as a proxy for all metrics.
+
+    Each entry is a dict with: name, state, lat, lng, total, axes, data.
+    """
+    all_states = load_all_data()
+
     results = []
-    for name, d in METRO_DATA.items():
-        scored = score_market(d)
+    for metro_name, meta in METRO_AREAS.items():
+        parent_abbr = meta["state"]
+        if parent_abbr not in all_states:
+            continue
+
+        # Copy parent state data for the metro (state-level proxy)
+        d = dict(all_states[parent_abbr])
+        d["name"] = metro_name
+        d["metro"] = True
+
+        scored = score_market(d, all_states)
         if scored is None:
             continue
+
         results.append({
-            "name": name,
-            "state": d["state"],
-            "lat": d["lat"],
-            "lng": d["lng"],
+            "name": metro_name,
+            "state": parent_abbr,
+            "lat": meta["lat"],
+            "lng": meta["lng"],
             "total": scored["total"],
             "axes": scored["axes"],
             "data": d,
         })
+
+    results.sort(key=lambda x: x["total"], reverse=True)
     return results
-
-
-def get_state_rankings():
-    """Return states sorted by total score (descending)."""
-    data = load_state_data()
-    data.sort(key=lambda x: x["total"], reverse=True)
-    return data
-
-
-def get_metro_rankings():
-    """Return metros sorted by total score (descending)."""
-    data = load_metro_data()
-    data.sort(key=lambda x: x["total"], reverse=True)
-    return data
