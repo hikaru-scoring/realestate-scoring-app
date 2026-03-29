@@ -181,17 +181,6 @@ def cached_metro_rankings():
 
 
 # ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
-st.markdown(f"""
-<div style="text-align:center; margin-bottom:10px;">
-    <div style="font-size:38px; font-weight:900; color:{PRIMARY_COLOR};">REALESTATE-1000</div>
-    <div style="font-size:16px; color:#64748B; margin-top:-4px;">US Real Estate Market Scoring</div>
-    <div style="font-size:13px; color:#999; margin-top:2px;">Scoring all 50 states + DC based on real-time market data. Data: Census ACS 2023, BLS, Redfin, FEMA</div>
-</div>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
 tab_dash, tab_detail, tab_rankings = st.tabs(["Dashboard", "Market Detail", "Rankings"])
