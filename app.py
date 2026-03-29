@@ -742,7 +742,7 @@ with tab_rankings:
             name = r["name"]
             score = r["total"]
             badge_label = r.get("abbr") or r.get("state") or ""
-            badge_color = "#2E7BE6"
+            badge_color = "#2E8B57"
 
             # Score color
             if score >= 800:
