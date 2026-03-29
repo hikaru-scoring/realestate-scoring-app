@@ -570,13 +570,78 @@ with tab_detail:
                     </div>
                     """, unsafe_allow_html=True)
                     with st.expander(f"Why {int(ax_val)}?", expanded=False):
-                        st.markdown(WHY_EXPLANATIONS.get(ax_name, ""))
+                        if ax_name == "Affordability":
+                            _pti = round(d["median_home_price"] / d["median_income"], 1) if d.get("median_income") else "N/A"
+                            st.markdown(f"""
+**Formula:** `Percentile rank of price-to-income (inverted) + mortgage burden (inverted) + rent-to-income (inverted)`
+
+**Raw Data:** Median Home Price: ${int(d.get('median_home_price', 0)):,} | Median Income: ${int(d.get('median_income', 0)):,} | Price-to-Income: {_pti}x | Mortgage Rate: {d.get('mortgage_rate', 'N/A')}%
+
+**Source:** Census ACS 2023, Redfin, Freddie Mac
+                            """)
+                        elif ax_name == "Market Momentum":
+                            st.markdown(f"""
+**Formula:** `Percentile rank of YoY price change + months of supply (inverted) + days on market (inverted) + sale-to-list ratio`
+
+**Raw Data:** YoY Price Change: {d.get('yoy_price_change', 'N/A')}% | Months of Supply: {d.get('months_inventory', 'N/A')} | Days on Market: {d.get('days_on_market', 'N/A')} | Sale-to-List: {d.get('sale_to_list_ratio', 'N/A')}
+
+**Source:** Redfin
+                            """)
+                        elif ax_name == "Economic Foundation":
+                            st.markdown(f"""
+**Formula:** `Percentile rank of unemployment (inverted) + population growth + GDP growth`
+
+**Raw Data:** Unemployment: {d.get('unemployment', 'N/A')}% | Pop Growth: {d.get('pop_growth', 'N/A')}% | GDP Growth: {d.get('gdp_growth', 'N/A')}%
+
+**Source:** BLS, Census Bureau, BEA
+                            """)
+                        elif ax_name == "Risk Profile":
+                            st.markdown(f"""
+**Formula:** `Percentile rank of FEMA disaster frequency (inverted: fewer disasters = higher score)`
+
+**Raw Data:** Disaster Events (5yr): {d.get('disaster_freq', 'N/A')}
+
+**Source:** FEMA Disaster Declarations API
+                            """)
+                        elif ax_name == "Investment Return":
+                            st.markdown(f"""
+**Formula:** `Percentile rank of rental yield + 5-year price appreciation`
+
+**Raw Data:** Rental Yield: {d.get('cap_rate', 'N/A')}% | 5yr Appreciation: {d.get('price_appreciation_5yr', 'N/A')}%
+
+**Source:** Census ACS 2023, Redfin
+                            """)
 
             # Key metrics (snapshot style)
             st.markdown(
                 "<div style='font-size: 0.9em; font-weight: bold; color: #333; margin-top: 10px; margin-bottom: 15px; border-left: 3px solid #2E7BE6; padding-left: 8px;'>III. KEY METRICS SNAPSHOT</div>",
                 unsafe_allow_html=True,
             )
+
+            # TOTAL / STRONGEST / WEAKEST summary row
+            sc1, sc2, sc3 = st.columns(3)
+            _best_ax = max(axes, key=axes.get) if axes else "N/A"
+            _best_val = int(axes.get(_best_ax, 0))
+            _worst_ax = min(axes, key=axes.get) if axes else "N/A"
+            _worst_val = int(axes.get(_worst_ax, 0))
+            sc1.markdown(f"""
+            <div style="background:#f8fafc; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid #e2e8f0;">
+                <div style="font-size:0.75em; color:#64748b; font-weight:600;">TOTAL SCORE</div>
+                <div style="font-size:1.5em; font-weight:900; color:#1e293b; line-height:1.2;">{total} <span style="font-size:0.5em; color:#999;">/1000</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+            sc2.markdown(f"""
+            <div style="background:#f0fdf4; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid #bbf7d0;">
+                <div style="font-size:0.75em; color:#64748b; font-weight:600;">STRONGEST</div>
+                <div style="font-size:1.5em; font-weight:900; color:#10b981; line-height:1.2;">{_best_ax} ({_best_val})</div>
+            </div>
+            """, unsafe_allow_html=True)
+            sc3.markdown(f"""
+            <div style="background:#fef2f2; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid #fecaca;">
+                <div style="font-size:0.75em; color:#64748b; font-weight:600;">WEAKEST</div>
+                <div style="font-size:1.5em; font-weight:900; color:#ef4444; line-height:1.2;">{_worst_ax} ({_worst_val})</div>
+            </div>
+            """, unsafe_allow_html=True)
 
             pti = round(d["median_home_price"] / d["median_income"], 1) if d["median_income"] else 0
             home_price = f"${int(d['median_home_price']):,}" if d["median_home_price"] else "N/A"
