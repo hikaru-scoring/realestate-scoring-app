@@ -728,7 +728,7 @@ with tab_rankings:
             name = r["name"]
             score = r["total"]
             badge_label = r.get("abbr") or r.get("state") or ""
-            badge_color = "#64748b"
+            badge_color = "#2E7BE6"
 
             # Score color
             if score >= 800:
@@ -753,22 +753,22 @@ with tab_rankings:
             else:
                 change_html = ""
 
-            st.markdown(f"""
-<div style="display:flex; align-items:center; padding:14px 20px; background:#fff; border-radius:12px; margin-bottom:8px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-    <div style="font-size:1.4em; font-weight:900; color:#94a3b8; width:40px;">#{i}</div>
-    <div style="flex:1;">
-        <div style="font-size:1.05em; font-weight:700; color:#1e293b;">{name}</div>
-        <span style="font-size:0.75em; background:{badge_color}; color:#fff; padding:2px 8px; border-radius:20px;">{badge_label}</span>
-        {change_html}
-    </div>
-    <div style="text-align:right; min-width:80px;">
-        <div style="font-size:1.5em; font-weight:900; color:{bar_color};">{score}</div>
-        <div style="background:#f1f5f9; border-radius:4px; height:6px; width:80px; margin-top:4px;">
-            <div style="background:{bar_color}; height:6px; border-radius:4px; width:{score/10}%;"></div>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+            pct = score / 10
+            st.markdown(
+                f'<div style="display:flex; align-items:center; padding:14px 20px; background:#fff; border-radius:12px; margin-bottom:8px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.04);">'
+                f'<div style="font-size:1.4em; font-weight:900; color:#94a3b8; width:40px;">#{i}</div>'
+                f'<div style="flex:1;">'
+                f'<div style="font-size:1.05em; font-weight:700; color:#1e293b;">{name}</div>'
+                f'<span style="font-size:0.75em; background:{badge_color}; color:#fff; padding:2px 8px; border-radius:20px;">{badge_label}</span> '
+                f'{change_html}'
+                f'</div>'
+                f'<div style="text-align:right; min-width:80px;">'
+                f'<div style="font-size:1.5em; font-weight:900; color:{bar_color};">{score}</div>'
+                f'<div style="background:#f1f5f9; border-radius:4px; height:6px; width:80px; margin-top:4px;">'
+                f'<div style="background:{bar_color}; height:6px; border-radius:4px; width:{pct}%;"></div>'
+                f'</div></div></div>',
+                unsafe_allow_html=True,
+            )
 
         with st.expander("Scoring Methodology"):
             st.markdown("### REALESTATE-1000 Scoring System")
