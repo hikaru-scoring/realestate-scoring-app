@@ -366,6 +366,7 @@ with tab_detail:
         name_list = [r["name"] for r in detail_rankings]
 
         # ----- Map at top of Market Detail -----
+        _map_event = None
         scores_detail = [r["total"] for r in detail_rankings]
 
         if view_mode_detail == "States":
@@ -422,9 +423,9 @@ with tab_detail:
                 dragmode=False,
             )
             fig_map.update_geos(projection_type="albers usa")
-            st.plotly_chart(fig_map, use_container_width=True, config={
-                "displayModeBar": False, "scrollZoom": False, "doubleClick": False, "staticPlot": True,
-            })
+            _map_event = st.plotly_chart(fig_map, use_container_width=True, config={
+                "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
+            }, on_select="rerun", key="state_map_detail")
 
         else:
             # Metro bubble map
@@ -480,6 +481,19 @@ with tab_detail:
             st.plotly_chart(fig_metro, use_container_width=True, config={
                 "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
             })
+
+        # Handle map click to update selectbox
+        if view_mode_detail == "States" and _map_event:
+            try:
+                _points = _map_event.selection.points
+                if _points:
+                    _clicked_loc = _points[0].get("location", "")
+                    for r in detail_rankings:
+                        if r.get("abbr") == _clicked_loc:
+                            st.session_state["market_detail_select"] = r["name"]
+                            break
+            except Exception:
+                pass
 
         selected_name = st.selectbox("Select a market to view details", name_list, key="market_detail_select")
         selected = next((r for r in detail_rankings if r["name"] == selected_name), None)
