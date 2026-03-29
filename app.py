@@ -366,7 +366,6 @@ with tab_detail:
         name_list = [r["name"] for r in detail_rankings]
 
         # ----- Map at top of Market Detail -----
-        _map_event = None
         scores_detail = [r["total"] for r in detail_rankings]
 
         if view_mode_detail == "States":
@@ -423,9 +422,9 @@ with tab_detail:
                 dragmode=False,
             )
             fig_map.update_geos(projection_type="albers usa")
-            _map_event = st.plotly_chart(fig_map, use_container_width=True, config={
-                "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
-            }, on_select="rerun", key="state_map_detail")
+            st.plotly_chart(fig_map, use_container_width=True, config={
+                "displayModeBar": False, "scrollZoom": False, "doubleClick": False, "staticPlot": True,
+            })
 
         else:
             # Metro bubble map
@@ -481,19 +480,6 @@ with tab_detail:
             st.plotly_chart(fig_metro, use_container_width=True, config={
                 "displayModeBar": False, "scrollZoom": False, "doubleClick": False,
             })
-
-        # Handle map click to update selectbox (States choropleth only)
-        if _map_event:
-            try:
-                _points = _map_event.selection.points
-                if _points:
-                    _clicked_loc = _points[0].get("location", "")
-                    for r in detail_rankings:
-                        if r["abbr"] == _clicked_loc:
-                            st.session_state["market_detail_select"] = r["name"]
-                            break
-            except Exception:
-                pass
 
         selected_name = st.selectbox("Select a market to view details", name_list, key="market_detail_select")
         selected = next((r for r in detail_rankings if r["name"] == selected_name), None)
@@ -656,7 +642,7 @@ with tab_detail:
                     st.markdown(f"""
                     <div style="background:#f8fafc; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid #e2e8f0;">
                         <div style="font-size:0.75em; color:#64748b; font-weight:600;">{label}</div>
-                        <div style="font-size:1.5em; font-weight:900; color:#1e293b; line-height:1.2;">{val}</div>
+                        <div style="font-size:1.5em; font-weight:900; color:#2E7BE6; line-height:1.2;">{val}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
